@@ -1,0 +1,10 @@
+target
+.git
+.github
+node_modules
+**/*.rs.bk
+Dockerfile
+.env
+*.log
+dist
+**/target

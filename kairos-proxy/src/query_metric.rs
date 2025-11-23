@@ -99,7 +99,7 @@ pub async fn query_metric_handler(
             headers.remove(*name);
         }
 
-        let mut resp_builder = hyper::Response::builder().status(status);
+        let resp_builder = hyper::Response::builder().status(status);
         let mut response = resp_builder.body(body).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
         // Attach remaining headers from backend
         response.headers_mut().extend(headers);
