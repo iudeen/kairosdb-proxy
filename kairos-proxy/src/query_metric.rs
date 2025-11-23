@@ -43,8 +43,11 @@ pub async fn query_metric_handler(
 
     // If running in simple mode, forward only the first metric to its matching backend
     if matches!(state.mode, crate::config::Mode::Simple) {
-        let first = metrics.get(0).cloned().ok_or(StatusCode::BAD_REQUEST)?;
-        let name = first.get("name").and_then(|v| v.as_str()).ok_or(StatusCode::BAD_REQUEST)?;
+        let first = metrics.first().cloned().ok_or(StatusCode::BAD_REQUEST)?;
+        let name = first
+            .get("name")
+            .and_then(|v| v.as_str())
+            .ok_or(StatusCode::BAD_REQUEST)?;
         // find backend
         let mut target: Option<(String, Option<String>)> = None;
         for (re, url, token) in state.backends.iter() {
@@ -62,9 +65,16 @@ pub async fn query_metric_handler(
         let body = body_bytes.clone();
 
         // Forward request to chosen backend
-        let mut builder = state.client.post(format!("{}{}", url.trim_end_matches('/'), "/api/v1/datapoints/query")).body(body);
+        let mut builder = state
+            .client
+            .post(format!(
+                "{}{}",
+                url.trim_end_matches('/'),
+                "/api/v1/datapoints/query"
+            ))
+            .body(body);
         for (name, value) in req.headers().iter() {
-            if name == &hyper::http::header::HOST {
+            if name == hyper::http::header::HOST {
                 continue;
             }
             builder = builder.header(name, value);
@@ -80,7 +90,7 @@ pub async fn query_metric_handler(
         // Stream the backend response body directly to the client to keep memory usage low
         let stream = resp
             .bytes_stream()
-            .map(|res| res.map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, format!("upstream error: {}", e))));
+            .map(|res| res.map_err(|e| std::io::Error::other(format!("upstream error: {}", e))));
         let body = StreamBody::new(stream);
 
         // Standard hop-by-hop headers that should not be forwarded
@@ -100,7 +110,9 @@ pub async fn query_metric_handler(
         }
 
         let resp_builder = hyper::Response::builder().status(status);
-        let mut response = resp_builder.body(body).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        let mut response = resp_builder
+            .body(body)
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
         // Attach remaining headers from backend
         response.headers_mut().extend(headers);
         return Ok(response.into_response());
@@ -148,7 +160,10 @@ pub async fn query_metric_handler(
                 payload_map.insert(k.clone(), v.clone());
             }
         }
-        payload_map.insert("metrics".to_string(), serde_json::Value::Array(metrics_for_backend));
+        payload_map.insert(
+            "metrics".to_string(),
+            serde_json::Value::Array(metrics_for_backend),
+        );
         let body = match serde_json::to_vec(&serde_json::Value::Object(payload_map)) {
             Ok(b) => b,
             Err(_) => return Err(StatusCode::INTERNAL_SERVER_ERROR),
@@ -161,9 +176,15 @@ pub async fn query_metric_handler(
                 Err(_) => return None,
             };
 
-            let mut builder = client.post(format!("{}{}", url.trim_end_matches('/'), "/api/v1/datapoints/query")).body(body);
+            let mut builder = client
+                .post(format!(
+                    "{}{}",
+                    url.trim_end_matches('/'),
+                    "/api/v1/datapoints/query"
+                ))
+                .body(body);
             for (name, value) in headers.iter() {
-                if name == &hyper::http::header::HOST {
+                if name == hyper::http::header::HOST {
                     continue;
                 }
                 builder = builder.header(name, value);
@@ -195,7 +216,10 @@ pub async fn query_metric_handler(
                 if let Some(results) = query.get("results").and_then(|r| r.as_array()) {
                     for result in results {
                         if let Some(name) = result.get("name").and_then(|v| v.as_str()) {
-                            metric_results.entry(name.to_string()).or_default().push(result.clone());
+                            metric_results
+                                .entry(name.to_string())
+                                .or_default()
+                                .push(result.clone());
                         }
                     }
                 }
@@ -234,16 +258,32 @@ pub async fn query_metric_handler(
         let mut merged_result = serde_json::Map::new();
         merged_result.insert("name".to_string(), serde_json::Value::String(name));
         // Insert merged tags
-        let tags_obj = merged_tags.into_iter().map(|(k, v)| (k, serde_json::Value::Array(v.into_iter().map(serde_json::Value::String).collect()))).collect();
+        let tags_obj = merged_tags
+            .into_iter()
+            .map(|(k, v)| {
+                (
+                    k,
+                    serde_json::Value::Array(
+                        v.into_iter().map(serde_json::Value::String).collect(),
+                    ),
+                )
+            })
+            .collect();
         merged_result.insert("tags".to_string(), serde_json::Value::Object(tags_obj));
         // Insert merged values
-        merged_result.insert("values".to_string(), serde_json::Value::Array(merged_values));
+        merged_result.insert(
+            "values".to_string(),
+            serde_json::Value::Array(merged_values),
+        );
         merged_results.push(serde_json::Value::Object(merged_result));
     }
     // Build final response: { "queries": [ { "results": [ ... ] } ] }
     let mut queries_arr = Vec::new();
     let mut query_obj = serde_json::Map::new();
-    query_obj.insert("results".to_string(), serde_json::Value::Array(merged_results));
+    query_obj.insert(
+        "results".to_string(),
+        serde_json::Value::Array(merged_results),
+    );
     queries_arr.push(serde_json::Value::Object(query_obj));
     let mut response = serde_json::Map::new();
     response.insert("queries".to_string(), serde_json::Value::Array(queries_arr));
@@ -270,7 +310,7 @@ async fn to_bytes(body: &mut Body) -> Result<Bytes, StatusCode> {
 mod tests {
     use super::*;
     use crate::config::{Backend, Config, Mode};
-    use axum::{Router, routing::post};
+    use axum::{routing::post, Router};
     use serde_json::json;
     use std::sync::Arc;
     use tokio::sync::Mutex;
@@ -286,7 +326,8 @@ mod tests {
                 post(move |body: bytes::Bytes| {
                     let rec = rec1.clone();
                     async move {
-                        let v: serde_json::Value = serde_json::from_slice(&body).unwrap_or(serde_json::Value::Null);
+                        let v: serde_json::Value =
+                            serde_json::from_slice(&body).unwrap_or(serde_json::Value::Null);
                         *rec.lock().await = Some(v.clone());
                         // echo back a KairosDB-style response with one result per metric
                         let mut results = Vec::new();
@@ -311,7 +352,8 @@ mod tests {
                 post(move |body: bytes::Bytes| {
                     let rec = rec2.clone();
                     async move {
-                        let v: serde_json::Value = serde_json::from_slice(&body).unwrap_or(serde_json::Value::Null);
+                        let v: serde_json::Value =
+                            serde_json::from_slice(&body).unwrap_or(serde_json::Value::Null);
                         *rec.lock().await = Some(v.clone());
                         // respond similarly for tags endpoint
                         let mut results = Vec::new();
@@ -334,7 +376,9 @@ mod tests {
 
         let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
         let addr = listener.local_addr().expect("addr");
-        let server = axum::Server::from_tcp(listener).expect("server").serve(app.into_make_service());
+        let server = axum::Server::from_tcp(listener)
+            .expect("server")
+            .serve(app.into_make_service());
         tokio::spawn(server);
         (format!("http://127.0.0.1:{}", addr.port()), received)
     }
@@ -347,8 +391,16 @@ mod tests {
         let cfg = Config {
             listen: None,
             backends: vec![
-                Backend { pattern: "^cpu\\..*".to_string(), url: b1_url.clone(), token: None },
-                Backend { pattern: "^mem\\..*".to_string(), url: b2_url.clone(), token: None },
+                Backend {
+                    pattern: "^cpu\\..*".to_string(),
+                    url: b1_url.clone(),
+                    token: None,
+                },
+                Backend {
+                    pattern: "^mem\\..*".to_string(),
+                    url: b2_url.clone(),
+                    token: None,
+                },
             ],
             timeout_secs: Some(2),
             max_outbound_concurrency: Some(8),
@@ -366,10 +418,22 @@ mod tests {
             .unwrap();
 
         let resp = query_metric_handler(State(state), req).await.expect("resp");
-        let bytes = hyper::body::to_bytes(resp.into_body()).await.expect("bytes");
+        let bytes = hyper::body::to_bytes(resp.into_body())
+            .await
+            .expect("bytes");
         let v: serde_json::Value = serde_json::from_slice(&bytes).expect("json");
-        let results = v.get("queries").and_then(|q| q.get(0)).and_then(|o| o.get("results")).and_then(|r| r.as_array()).expect("results array");
-        let names: Vec<String> = results.iter().filter_map(|r| r.get("name")).filter_map(|n| n.as_str()).map(|s| s.to_string()).collect();
+        let results = v
+            .get("queries")
+            .and_then(|q| q.get(0))
+            .and_then(|o| o.get("results"))
+            .and_then(|r| r.as_array())
+            .expect("results array");
+        let names: Vec<String> = results
+            .iter()
+            .filter_map(|r| r.get("name"))
+            .filter_map(|n| n.as_str())
+            .map(|s| s.to_string())
+            .collect();
         assert!(names.contains(&"cpu.test".to_string()));
         assert!(names.contains(&"mem.test".to_string()));
     }
@@ -382,8 +446,16 @@ mod tests {
         let cfg = Config {
             listen: None,
             backends: vec![
-                Backend { pattern: "^cpu\\..*".to_string(), url: b1_url.clone(), token: None },
-                Backend { pattern: "^mem\\..*".to_string(), url: b2_url.clone(), token: None },
+                Backend {
+                    pattern: "^cpu\\..*".to_string(),
+                    url: b1_url.clone(),
+                    token: None,
+                },
+                Backend {
+                    pattern: "^mem\\..*".to_string(),
+                    url: b2_url.clone(),
+                    token: None,
+                },
             ],
             timeout_secs: Some(2),
             max_outbound_concurrency: Some(8),
@@ -400,22 +472,50 @@ mod tests {
             .body(Body::from(body.clone()))
             .unwrap();
 
-        let resp = query_metric_handler(State(state.clone()), req).await.expect("resp");
-        let bytes = hyper::body::to_bytes(resp.into_body()).await.expect("bytes");
+        let resp = query_metric_handler(State(state.clone()), req)
+            .await
+            .expect("resp");
+        let bytes = hyper::body::to_bytes(resp.into_body())
+            .await
+            .expect("bytes");
         let v: serde_json::Value = serde_json::from_slice(&bytes).expect("json");
-        let results = v.get("queries").and_then(|q| q.get(0)).and_then(|o| o.get("results")).and_then(|r| r.as_array()).expect("results array");
+        let results = v
+            .get("queries")
+            .and_then(|q| q.get(0))
+            .and_then(|o| o.get("results"))
+            .and_then(|r| r.as_array())
+            .expect("results array");
         // In simple mode the full backend response is returned (both metrics)
         assert_eq!(results.len(), 2);
-        let names: Vec<String> = results.iter().filter_map(|r| r.get("name")).filter_map(|n| n.as_str()).map(|s| s.to_string()).collect();
+        let names: Vec<String> = results
+            .iter()
+            .filter_map(|r| r.get("name"))
+            .filter_map(|n| n.as_str())
+            .map(|s| s.to_string())
+            .collect();
         assert!(names.contains(&"cpu.first".to_string()));
         assert!(names.contains(&"mem.other".to_string()));
 
         // ensure the backend received the full payload (two metrics)
         let rec = r1.lock().await;
         let received = rec.as_ref().expect("received payload");
-        let metrics = received.get("metrics").and_then(|m| m.as_array()).expect("metrics arr");
-        assert_eq!(metrics.len(), 2, "backend should have received full payload with two metrics");
+        let metrics = received
+            .get("metrics")
+            .and_then(|m| m.as_array())
+            .expect("metrics arr");
+        assert_eq!(
+            metrics.len(),
+            2,
+            "backend should have received full payload with two metrics"
+        );
         // and extra field preserved
-        assert_eq!(received.get("extra").and_then(|e| e.get("k")).and_then(|v| v.as_str()).unwrap(), "v");
+        assert_eq!(
+            received
+                .get("extra")
+                .and_then(|e| e.get("k"))
+                .and_then(|v| v.as_str())
+                .unwrap(),
+            "v"
+        );
     }
 }

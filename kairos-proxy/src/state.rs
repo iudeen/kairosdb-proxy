@@ -27,7 +27,12 @@ impl AppState {
 
         let mode = cfg.mode.clone().unwrap_or_default();
 
-        Ok(AppState { client, backends, semaphore, mode })
+        Ok(AppState {
+            client,
+            backends,
+            semaphore,
+            mode,
+        })
     }
 }
 
@@ -40,7 +45,11 @@ mod tests {
     fn appstate_from_config_sets_mode_and_backends() {
         let cfg = Config {
             listen: None,
-            backends: vec![Backend { pattern: "^a".to_string(), url: "http://127.0.0.1:9000".to_string(), token: None }],
+            backends: vec![Backend {
+                pattern: "^a".to_string(),
+                url: "http://127.0.0.1:9000".to_string(),
+                token: None,
+            }],
             timeout_secs: Some(1),
             max_outbound_concurrency: Some(4),
             mode: Some(Mode::Simple),

@@ -1,8 +1,8 @@
 mod config;
 mod proxy;
-mod state;
 mod query_metric;
 mod query_metric_tags;
+mod state;
 
 use axum::Router;
 use config::Config;
@@ -24,8 +24,14 @@ async fn main() -> anyhow::Result<()> {
 
     let app = Router::new()
         .route("/health", axum::routing::get(proxy::health_handler))
-        .route("/api/v1/datapoints/query/tags", axum::routing::post(proxy::query_metric_tags_handler))
-        .route("/api/v1/datapoints/query", axum::routing::post(proxy::query_metric_handler))
+        .route(
+            "/api/v1/datapoints/query/tags",
+            axum::routing::post(proxy::query_metric_tags_handler),
+        )
+        .route(
+            "/api/v1/datapoints/query",
+            axum::routing::post(proxy::query_metric_handler),
+        )
         .with_state(state);
 
     let listen = cfg.listen.unwrap_or_else(|| "0.0.0.0:8080".into());
@@ -43,4 +49,3 @@ async fn shutdown_signal() {
     let _ = signal::ctrl_c().await;
     info!("Shutdown signal received");
 }
-
