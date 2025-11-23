@@ -1,0 +1,10 @@
+version: '3.8'
+services:
+  kairos-proxy:
+    build:
+      context: .
+      dockerfile: kairos-proxy/Dockerfile
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./kairos-proxy/config.toml.example:/app/config.toml:ro
