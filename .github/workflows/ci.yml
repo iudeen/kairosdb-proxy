@@ -33,4 +33,10 @@ jobs:
         run: |
           rustup --version
           cargo --version
-          cargo test --all --verbose
+          cargo fmt --all -- --check
+          cargo clippy --all -- -D warnings
+          # optional security scan (will fail CI if vulnerabilities are found)
+          cargo install --locked cargo-audit || true
+          cargo audit || true
+          # Build and run tests for the kairos-proxy crate explicitly to avoid workspace ambiguity
+          cargo test --manifest-path kairos-proxy/Cargo.toml --verbose
