@@ -1,6 +1,6 @@
 use crate::state::AppState;
 use axum::{
-    body::Body,
+    body::{Body, StreamBody},
     extract::State,
     http::{Request, StatusCode},
     response::{IntoResponse, Response},
@@ -20,15 +20,14 @@ pub async fn query_metric_tags_handler(
     }
 
     // Read and parse the JSON body
-    let mut body_bytes = bytes::Bytes::new();
     let mut req = req;
-    match to_bytes(req.body_mut()).await {
-        Ok(b) => body_bytes = b,
-        Err(_) => {
+    let body_bytes = match to_bytes(req.body_mut()).await {
+        Ok(b) => b,
+        Err(e) => {
             error!("reading body failed");
-            return Err(StatusCode::BAD_REQUEST);
+            return Err(e);
         }
-    }
+    };
 
     let mut json: serde_json::Value = match serde_json::from_slice(&body_bytes) {
         Ok(j) => j,
@@ -77,7 +76,13 @@ pub async fn query_metric_tags_handler(
         // Clone backend headers before consuming the body
         let mut headers = resp.headers().clone();
         let status = resp.status();
-        let bytes = resp.bytes().await.map_err(|_| StatusCode::BAD_GATEWAY)?;
+
+        // Stream the backend response body directly to the client to keep memory usage low
+        let stream = resp
+            .bytes_stream()
+            .map(|res| res.map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, format!("upstream error: {}", e))));
+        let body = StreamBody::new(stream);
+
         const HOP_BY_HOP: [&str; 9] = [
             "connection",
             "keep-alive",
@@ -93,8 +98,8 @@ pub async fn query_metric_tags_handler(
             headers.remove(*name);
         }
 
-        let mut resp_builder = hyper::Response::builder().status(status);
-        let mut response = resp_builder.body(Body::from(bytes)).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        let resp_builder = hyper::Response::builder().status(status);
+        let mut response = resp_builder.body(body).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
         response.headers_mut().extend(headers);
         return Ok(response.into_response());
     }

@@ -23,6 +23,7 @@ async fn main() -> anyhow::Result<()> {
     let state = Arc::new(AppState::from_config(&cfg)?);
 
     let app = Router::new()
+        .route("/health", axum::routing::get(proxy::health_handler))
         .route("/api/v1/datapoints/query/tags", axum::routing::post(proxy::query_metric_tags_handler))
         .route("/api/v1/datapoints/query", axum::routing::post(proxy::query_metric_handler))
         .with_state(state);

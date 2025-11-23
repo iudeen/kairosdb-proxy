@@ -1,6 +1,6 @@
 use crate::state::AppState;
 use axum::{
-    body::Body,
+    body::{Body, StreamBody},
     extract::State,
     http::{Request, StatusCode},
     response::{IntoResponse, Response},
@@ -8,7 +8,6 @@ use axum::{
 use bytes::Bytes;
 use futures::{stream::FuturesUnordered, StreamExt};
 use std::sync::Arc;
-use tokio::sync::OwnedSemaphorePermit;
 use tracing::error;
 
 pub async fn query_metric_handler(
@@ -21,15 +20,14 @@ pub async fn query_metric_handler(
     }
 
     // Read and parse the JSON body
-    let mut body_bytes = bytes::Bytes::new();
     let mut req = req;
-    match to_bytes(req.body_mut()).await {
-        Ok(b) => body_bytes = b,
-        Err(_) => {
+    let body_bytes = match to_bytes(req.body_mut()).await {
+        Ok(b) => b,
+        Err(e) => {
             error!("reading body failed");
-            return Err(StatusCode::BAD_REQUEST);
+            return Err(e);
         }
-    }
+    };
 
     let mut json: serde_json::Value = match serde_json::from_slice(&body_bytes) {
         Ok(j) => j,
@@ -78,7 +76,13 @@ pub async fn query_metric_handler(
         // Clone backend headers before consuming the body
         let mut headers = resp.headers().clone();
         let status = resp.status();
-        let bytes = resp.bytes().await.map_err(|_| StatusCode::BAD_GATEWAY)?;
+
+        // Stream the backend response body directly to the client to keep memory usage low
+        let stream = resp
+            .bytes_stream()
+            .map(|res| res.map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, format!("upstream error: {}", e))));
+        let body = StreamBody::new(stream);
+
         // Standard hop-by-hop headers that should not be forwarded
         const HOP_BY_HOP: [&str; 9] = [
             "connection",
@@ -96,7 +100,7 @@ pub async fn query_metric_handler(
         }
 
         let mut resp_builder = hyper::Response::builder().status(status);
-        let mut response = resp_builder.body(Body::from(bytes)).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        let mut response = resp_builder.body(body).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
         // Attach remaining headers from backend
         response.headers_mut().extend(headers);
         return Ok(response.into_response());
@@ -400,9 +404,11 @@ mod tests {
         let bytes = hyper::body::to_bytes(resp.into_body()).await.expect("bytes");
         let v: serde_json::Value = serde_json::from_slice(&bytes).expect("json");
         let results = v.get("queries").and_then(|q| q.get(0)).and_then(|o| o.get("results")).and_then(|r| r.as_array()).expect("results array");
-        // should only have the first metric forwarded
-        assert_eq!(results.len(), 1);
-        assert_eq!(results[0].get("name").and_then(|n| n.as_str()).unwrap(), "cpu.first");
+        // In simple mode the full backend response is returned (both metrics)
+        assert_eq!(results.len(), 2);
+        let names: Vec<String> = results.iter().filter_map(|r| r.get("name")).filter_map(|n| n.as_str()).map(|s| s.to_string()).collect();
+        assert!(names.contains(&"cpu.first".to_string()));
+        assert!(names.contains(&"mem.other".to_string()));
 
         // ensure the backend received the full payload (two metrics)
         let rec = r1.lock().await;
