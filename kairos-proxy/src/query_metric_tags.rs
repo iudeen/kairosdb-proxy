@@ -10,6 +10,63 @@ use futures::{stream::FuturesUnordered, StreamExt};
 use std::sync::Arc;
 use tracing::error;
 
+/// Helper function to forward a request to a backend in Simple mode
+async fn forward_to_backend_simple(
+    state: &AppState,
+    url: &str,
+    token: &Option<String>,
+    body_bytes: Bytes,
+    headers: &hyper::HeaderMap,
+    endpoint: &str,
+) -> Result<Response, StatusCode> {
+    // Forward request to chosen backend
+    let mut builder = state
+        .client
+        .post(format!("{}{}", url.trim_end_matches('/'), endpoint))
+        .body(body_bytes);
+    for (name, value) in headers.iter() {
+        if name == hyper::http::header::HOST {
+            continue;
+        }
+        builder = builder.header(name, value);
+    }
+    if let Some(t) = token {
+        builder = builder.header("Authorization", format!("Bearer {}", t));
+    }
+    let resp = builder.send().await.map_err(|_| StatusCode::BAD_GATEWAY)?;
+    // Clone backend headers before consuming the body
+    let mut headers = resp.headers().clone();
+    let status = resp.status();
+
+    // Stream the backend response body directly to the client to keep memory usage low
+    let stream = resp
+        .bytes_stream()
+        .map(|res| res.map_err(|e| std::io::Error::other(format!("upstream error: {}", e))));
+    let body = StreamBody::new(stream);
+
+    const HOP_BY_HOP: [&str; 9] = [
+        "connection",
+        "keep-alive",
+        "proxy-authenticate",
+        "proxy-authorization",
+        "te",
+        "trailers",
+        "transfer-encoding",
+        "upgrade",
+        "host",
+    ];
+    for name in HOP_BY_HOP.iter() {
+        headers.remove(*name);
+    }
+
+    let resp_builder = hyper::Response::builder().status(status);
+    let mut response = resp_builder
+        .body(body)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    response.headers_mut().extend(headers);
+    Ok(response.into_response())
+}
+
 pub async fn query_metric_tags_handler(
     State(state): State<Arc<AppState>>,
     req: Request<Body>,
@@ -39,77 +96,56 @@ pub async fn query_metric_tags_handler(
             .and_then(|(_, value)| value.to_str().ok())
             .map(|s| s.to_string());
 
-        if let Some(name) = metric_name_from_header {
+        let metric_name = if let Some(name) = metric_name_from_header {
             // Use header value for routing, skip body parsing
-            let mut target: Option<(String, Option<String>)> = None;
-            for (re, url, token) in state.backends.iter() {
-                if re.is_match(&name) {
-                    target = Some((url.clone(), token.clone()));
-                    break;
-                }
-            }
-            let (url, token) = match target {
-                Some(t) => t,
-                None => return Err(StatusCode::BAD_GATEWAY),
+            name
+        } else {
+            // Parse JSON body for metric extraction
+            let json: serde_json::Value = match serde_json::from_slice(&body_bytes) {
+                Ok(j) => j,
+                Err(_) => return Err(StatusCode::BAD_REQUEST),
             };
 
-            // Use the original full payload
-            let body = body_bytes.clone();
+            // Extract first metric name from body
+            let first_metric = json
+                .get("metrics")
+                .and_then(|v| v.as_array())
+                .and_then(|arr| arr.first())
+                .ok_or(StatusCode::BAD_REQUEST)?;
 
-            // Forward request to chosen backend
-            let mut builder = state
-                .client
-                .post(format!(
-                    "{}{}",
-                    url.trim_end_matches('/'),
-                    "/api/v1/datapoints/query/tags"
-                ))
-                .body(body);
-            for (name, value) in req.headers().iter() {
-                if name == hyper::http::header::HOST {
-                    continue;
-                }
-                builder = builder.header(name, value);
+            first_metric
+                .get("name")
+                .and_then(|v| v.as_str())
+                .ok_or(StatusCode::BAD_REQUEST)?
+                .to_string()
+        };
+
+        // Find backend matching the metric name
+        let mut target: Option<(String, Option<String>)> = None;
+        for (re, url, token) in state.backends.iter() {
+            if re.is_match(&metric_name) {
+                target = Some((url.clone(), token.clone()));
+                break;
             }
-            if let Some(t) = token {
-                builder = builder.header("Authorization", format!("Bearer {}", t));
-            }
-            let resp = builder.send().await.map_err(|_| StatusCode::BAD_GATEWAY)?;
-            // Clone backend headers before consuming the body
-            let mut headers = resp.headers().clone();
-            let status = resp.status();
-
-            // Stream the backend response body directly to the client to keep memory usage low
-            let stream = resp.bytes_stream().map(|res| {
-                res.map_err(|e| std::io::Error::other(format!("upstream error: {}", e)))
-            });
-            let body = StreamBody::new(stream);
-
-            const HOP_BY_HOP: [&str; 9] = [
-                "connection",
-                "keep-alive",
-                "proxy-authenticate",
-                "proxy-authorization",
-                "te",
-                "trailers",
-                "transfer-encoding",
-                "upgrade",
-                "host",
-            ];
-            for name in HOP_BY_HOP.iter() {
-                headers.remove(*name);
-            }
-
-            let resp_builder = hyper::Response::builder().status(status);
-            let mut response = resp_builder
-                .body(body)
-                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-            response.headers_mut().extend(headers);
-            return Ok(response.into_response());
         }
+        let (url, token) = match target {
+            Some(t) => t,
+            None => return Err(StatusCode::BAD_GATEWAY),
+        };
+
+        // Forward request to chosen backend using helper function
+        return forward_to_backend_simple(
+            &state,
+            &url,
+            &token,
+            body_bytes,
+            req.headers(),
+            "/api/v1/datapoints/query/tags",
+        )
+        .await;
     }
 
-    // Parse JSON body for metric extraction
+    // Parse JSON body for metric extraction (Multi mode)
     let mut json: serde_json::Value = match serde_json::from_slice(&body_bytes) {
         Ok(j) => j,
         Err(_) => return Err(StatusCode::BAD_REQUEST),
@@ -122,82 +158,7 @@ pub async fn query_metric_tags_handler(
         _ => return Err(StatusCode::BAD_REQUEST),
     };
 
-    // If running in simple mode, forward only the first metric to its matching backend
-    if matches!(state.mode, crate::config::Mode::Simple) {
-        let first = metrics.first().cloned().ok_or(StatusCode::BAD_REQUEST)?;
-        let name = first
-            .get("name")
-            .and_then(|v| v.as_str())
-            .ok_or(StatusCode::BAD_REQUEST)?;
-        // find backend
-        let mut target: Option<(String, Option<String>)> = None;
-        for (re, url, token) in state.backends.iter() {
-            if re.is_match(name) {
-                target = Some((url.clone(), token.clone()));
-                break;
-            }
-        }
-        let (url, token) = match target {
-            Some(t) => t,
-            None => return Err(StatusCode::BAD_GATEWAY),
-        };
-
-        // Use the original full payload but determine backend by the first metric
-        let body = body_bytes.clone();
-
-        // Forward request to chosen backend
-        let mut builder = state
-            .client
-            .post(format!(
-                "{}{}",
-                url.trim_end_matches('/'),
-                "/api/v1/datapoints/query/tags"
-            ))
-            .body(body);
-        for (name, value) in req.headers().iter() {
-            if name == hyper::http::header::HOST {
-                continue;
-            }
-            builder = builder.header(name, value);
-        }
-        if let Some(t) = token {
-            builder = builder.header("Authorization", format!("Bearer {}", t));
-        }
-        let resp = builder.send().await.map_err(|_| StatusCode::BAD_GATEWAY)?;
-        // Clone backend headers before consuming the body
-        let mut headers = resp.headers().clone();
-        let status = resp.status();
-
-        // Stream the backend response body directly to the client to keep memory usage low
-        let stream = resp
-            .bytes_stream()
-            .map(|res| res.map_err(|e| std::io::Error::other(format!("upstream error: {}", e))));
-        let body = StreamBody::new(stream);
-
-        const HOP_BY_HOP: [&str; 9] = [
-            "connection",
-            "keep-alive",
-            "proxy-authenticate",
-            "proxy-authorization",
-            "te",
-            "trailers",
-            "transfer-encoding",
-            "upgrade",
-            "host",
-        ];
-        for name in HOP_BY_HOP.iter() {
-            headers.remove(*name);
-        }
-
-        let resp_builder = hyper::Response::builder().status(status);
-        let mut response = resp_builder
-            .body(body)
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-        response.headers_mut().extend(headers);
-        return Ok(response.into_response());
-    }
-
-    // Group metrics by backend
+    // Group metrics by backend (Multi mode)
     use std::collections::HashMap;
     let mut backend_metrics: HashMap<usize, Vec<serde_json::Value>> = HashMap::new();
     let mut backend_info: HashMap<usize, (&str, Option<&str>)> = HashMap::new();
