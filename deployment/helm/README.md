@@ -194,7 +194,7 @@ curl http://localhost:8080/health
 
 - [Main Project README](../../README.md)
 - [KairosDB Proxy Source](../../kairos-proxy/)
-- [Example Configuration](config.toml.example)
+- [Example Configuration](../../kairos-proxy/config.toml.example)
 
 ## Support
 
