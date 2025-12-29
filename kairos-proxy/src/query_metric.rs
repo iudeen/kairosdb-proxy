@@ -371,25 +371,25 @@ pub async fn query_metric_handler(
 async fn to_bytes(body: &mut Body, max_size: usize) -> Result<Bytes, StatusCode> {
     use axum::body::HttpBody;
     use bytes::BytesMut;
-    
+
     let mut buf = BytesMut::new();
     let mut total_size: usize = 0;
-    
+
     while let Some(chunk_res) = body.data().await {
         let chunk = match chunk_res {
             Ok(chunk) => chunk,
             Err(_) => return Err(StatusCode::BAD_REQUEST),
         };
-        
+
         // Check for overflow and size limit
         total_size = match total_size.checked_add(chunk.len()) {
             Some(new_size) if new_size <= max_size => new_size,
             _ => return Err(StatusCode::PAYLOAD_TOO_LARGE),
         };
-        
+
         buf.extend_from_slice(&chunk);
     }
-    
+
     Ok(buf.freeze())
 }
 
@@ -765,7 +765,7 @@ mod tests {
 
         const TEST_SIZE_LIMIT: usize = 100;
         const LARGE_DATA_SIZE: usize = 200;
-        
+
         let cfg = Config {
             listen: None,
             backends: vec![Backend {
@@ -792,7 +792,10 @@ mod tests {
             }]
         });
         let body = serde_json::to_vec(&large_payload).unwrap();
-        assert!(body.len() > TEST_SIZE_LIMIT, "test body should exceed size limit");
+        assert!(
+            body.len() > TEST_SIZE_LIMIT,
+            "test body should exceed size limit"
+        );
 
         let req = Request::builder()
             .method(axum::http::Method::POST)

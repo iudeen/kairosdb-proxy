@@ -367,24 +367,24 @@ pub async fn query_metric_tags_handler(
 async fn to_bytes(body: &mut Body, max_size: usize) -> Result<Bytes, StatusCode> {
     use axum::body::HttpBody;
     use bytes::BytesMut;
-    
+
     let mut buf = BytesMut::new();
     let mut total_size: usize = 0;
-    
+
     while let Some(chunk_res) = body.data().await {
         let chunk = match chunk_res {
             Ok(chunk) => chunk,
             Err(_) => return Err(StatusCode::BAD_REQUEST),
         };
-        
+
         // Check for overflow and size limit
         total_size = match total_size.checked_add(chunk.len()) {
             Some(new_size) if new_size <= max_size => new_size,
             _ => return Err(StatusCode::PAYLOAD_TOO_LARGE),
         };
-        
+
         buf.extend_from_slice(&chunk);
     }
-    
+
     Ok(buf.freeze())
 }
