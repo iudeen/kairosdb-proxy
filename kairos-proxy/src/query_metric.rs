@@ -10,6 +10,19 @@ use futures::{stream::FuturesUnordered, StreamExt};
 use std::sync::Arc;
 use tracing::{debug, error, info, warn};
 
+/// Minimal struct for extracting only the metric name during routing.
+/// This avoids deep allocations and HashMap creation from serde_json::Value.
+#[derive(serde::Deserialize)]
+struct MetricNameOnly {
+    name: String,
+}
+
+/// Minimal struct for extracting first metric's name from request body.
+#[derive(serde::Deserialize)]
+struct MetricsRequest {
+    metrics: Vec<MetricNameOnly>,
+}
+
 /// Helper function to forward a request to a backend in Simple mode
 async fn forward_to_backend_simple(
     state: &AppState,
@@ -105,24 +118,20 @@ pub async fn query_metric_handler(
             // Use header value for routing, skip body parsing
             name
         } else {
-            // Parse JSON body for metric extraction
-            let json: serde_json::Value = match serde_json::from_slice(&body_bytes) {
-                Ok(j) => j,
+            // Parse JSON body using minimal typed deserialization to extract only metric name.
+            // This avoids deep allocations and HashMap creation from serde_json::Value.
+            let request: MetricsRequest = match serde_json::from_slice(&body_bytes) {
+                Ok(r) => r,
                 Err(_) => return Err(StatusCode::BAD_REQUEST),
             };
 
-            // Extract first metric name from body
-            let first_metric = json
-                .get("metrics")
-                .and_then(|v| v.as_array())
-                .and_then(|arr| arr.first())
-                .ok_or(StatusCode::BAD_REQUEST)?;
-
-            first_metric
-                .get("name")
-                .and_then(|v| v.as_str())
+            // Extract first metric name
+            request
+                .metrics
+                .first()
                 .ok_or(StatusCode::BAD_REQUEST)?
-                .to_string()
+                .name
+                .clone()
         };
 
         // Find backend matching the metric name
@@ -845,5 +854,57 @@ mod tests {
 
         let result = query_metric_handler(State(state), req).await;
         assert!(result.is_ok(), "should succeed for body within limit");
+    }
+
+    #[tokio::test]
+    async fn simple_mode_minimal_deserialization_with_extra_fields() {
+        // Test that minimal typed deserialization works even when JSON has extra fields
+        let (b1_url, r1) = spawn_mock_server().await;
+
+        let cfg = Config {
+            listen: None,
+            backends: vec![Backend {
+                pattern: "^cpu\\..*".to_string(),
+                url: b1_url.clone(),
+                token: None,
+            }],
+            timeout_secs: Some(2),
+            max_outbound_concurrency: Some(8),
+            mode: Some(Mode::Simple),
+            max_request_body_bytes: None,
+        };
+        let state = Arc::new(AppState::from_config(&cfg).expect("state"));
+
+        // Payload with extra fields that should be ignored during routing
+        let payload = json!({
+            "metrics": [{
+                "name": "cpu.test",
+                "tags": {"host": "server1"},
+                "aggregators": [{"name": "sum"}],
+                "extra_field": "should_be_ignored"
+            }],
+            "start_absolute": 1234567890,
+            "cache_time": 0
+        });
+        let body = serde_json::to_vec(&payload).unwrap();
+        let req = Request::builder()
+            .method(axum::http::Method::POST)
+            .uri("/api/v1/datapoints/query")
+            .header("content-type", "application/json")
+            .body(Body::from(body.clone()))
+            .unwrap();
+
+        let resp = query_metric_handler(State(state), req).await.expect("resp");
+        assert_eq!(resp.status(), axum::http::StatusCode::OK);
+
+        // Verify backend received the full payload with all fields intact
+        let rec = r1.lock().await;
+        let received = rec.as_ref().expect("received payload");
+        assert_eq!(
+            received.get("metrics").and_then(|m| m.get(0)).and_then(|m| m.get("name")).and_then(|n| n.as_str()),
+            Some("cpu.test")
+        );
+        assert!(received.get("metrics").and_then(|m| m.get(0)).and_then(|m| m.get("tags")).is_some());
+        assert!(received.get("start_absolute").is_some());
     }
 }

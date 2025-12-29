@@ -10,6 +10,19 @@ use futures::{stream::FuturesUnordered, StreamExt};
 use std::sync::Arc;
 use tracing::{debug, error, info, warn};
 
+/// Minimal struct for extracting only the metric name during routing.
+/// This avoids deep allocations and HashMap creation from serde_json::Value.
+#[derive(serde::Deserialize)]
+struct MetricNameOnly {
+    name: String,
+}
+
+/// Minimal struct for extracting first metric's name from request body.
+#[derive(serde::Deserialize)]
+struct MetricsRequest {
+    metrics: Vec<MetricNameOnly>,
+}
+
 /// Helper function to forward a request to a backend in Simple mode
 async fn forward_to_backend_simple(
     state: &AppState,
@@ -103,24 +116,20 @@ pub async fn query_metric_tags_handler(
             // Use header value for routing, skip body parsing
             name
         } else {
-            // Parse JSON body for metric extraction
-            let json: serde_json::Value = match serde_json::from_slice(&body_bytes) {
-                Ok(j) => j,
+            // Parse JSON body using minimal typed deserialization to extract only metric name.
+            // This avoids deep allocations and HashMap creation from serde_json::Value.
+            let request: MetricsRequest = match serde_json::from_slice(&body_bytes) {
+                Ok(r) => r,
                 Err(_) => return Err(StatusCode::BAD_REQUEST),
             };
 
-            // Extract first metric name from body
-            let first_metric = json
-                .get("metrics")
-                .and_then(|v| v.as_array())
-                .and_then(|arr| arr.first())
-                .ok_or(StatusCode::BAD_REQUEST)?;
-
-            first_metric
-                .get("name")
-                .and_then(|v| v.as_str())
+            // Extract first metric name
+            request
+                .metrics
+                .first()
                 .ok_or(StatusCode::BAD_REQUEST)?
-                .to_string()
+                .name
+                .clone()
         };
 
         // Find backend matching the metric name
