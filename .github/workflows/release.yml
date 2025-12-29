@@ -1,0 +1,111 @@
+name: Release to GHCR
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: write
+      id-token: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata (tags, labels) for Docker
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}
+            type=raw,value=latest
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./kairos-proxy/Dockerfile
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Generate release notes
+        id: release_notes
+        run: |
+          VERSION=${GITHUB_REF#refs/tags/}
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+          cat > release_notes.md << 'EOF'
+          ## Docker Image
+          
+          The Docker image for this release is available at:
+          
+          ```bash
+          docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${VERSION}
+          docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+          ```
+          
+          ## What's Changed
+          
+          Full Changelog: ${{ github.event.repository.html_url }}/compare/${{ github.event.before }}...${{ github.event.after }}
+          
+          ## Installation
+          
+          ### Using Docker
+          
+          ```bash
+          docker run -p 8080:8080 \
+            -v $(pwd)/config.toml:/app/config.toml \
+            -e KAIROS_PROXY_CONFIG=/app/config.toml \
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${VERSION}
+          ```
+          
+          ### Using Docker Compose
+          
+          ```yaml
+          services:
+            kairos-proxy:
+              image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${VERSION}
+              ports:
+                - "8080:8080"
+              environment:
+                - KAIROS_PROXY_CONFIG=/app/config.toml
+              volumes:
+                - ./config.toml:/app/config.toml
+          ```
+          
+          For more information, see the [README](https://github.com/${{ github.repository }}/blob/${VERSION}/README.md) and [VERSIONING](https://github.com/${{ github.repository }}/blob/${VERSION}/VERSIONING.md) documentation.
+          EOF
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          body_path: release_notes.md
+          generate_release_notes: true
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

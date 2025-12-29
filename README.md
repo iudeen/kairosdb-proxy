@@ -22,6 +22,19 @@ This proxy fills that gap: it lets you present a single public endpoint and rout
 
 **Quick start**
 
+- Using Docker (recommended):
+
+```bash
+# Pull the latest release from GitHub Container Registry
+docker pull ghcr.io/iudeen/kairosdb-proxy:latest
+
+# Run with your config
+docker run -p 8080:8080 \
+  -v $(pwd)/config.toml:/app/config.toml \
+  -e KAIROS_PROXY_CONFIG=/app/config.toml \
+  ghcr.io/iudeen/kairosdb-proxy:latest
+```
+
 - Build locally (from repo root):
 
 ```bash
@@ -147,6 +160,30 @@ Developer notes (quick architecture summary)
 - `src/main.rs` — starts the axum server and wires routes.
 - `src/state.rs` — builds `reqwest::Client`, compiles backend regexes, holds a `Semaphore` and `Mode`.
 - `src/query_metric.rs` & `src/query_metric_tags.rs` — the two main handlers. `Simple` mode streams backend responses; `Multi` mode splits requests per backend and merges JSON results.
+
+**Versioning and Releases**
+
+This project follows [Semantic Versioning 2.0.0](https://semver.org/) (semver).
+
+- **Releases** are published to [GitHub Releases](https://github.com/iudeen/kairosdb-proxy/releases)
+- **Docker images** are automatically published to [GitHub Container Registry](https://github.com/iudeen/kairosdb-proxy/pkgs/container/kairosdb-proxy) on each release
+- See [VERSIONING.md](VERSIONING.md) for detailed information on:
+  - How to create a new release
+  - Version increment guidelines (major, minor, patch)
+  - Using released Docker images
+  - Release process and automation
+
+**Pull a specific version:**
+
+```bash
+docker pull ghcr.io/iudeen/kairosdb-proxy:v0.1.0
+```
+
+**Pull the latest release:**
+
+```bash
+docker pull ghcr.io/iudeen/kairosdb-proxy:latest
+```
 
 Contributing
 - PRs welcome. If you add features that expand scope (e.g., additional KairosDB endpoints), include tests and update `config.toml.example`.
