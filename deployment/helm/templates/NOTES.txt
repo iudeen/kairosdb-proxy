@@ -1,0 +1,20 @@
+
+KairosDB Proxy has been deployed.
+
+Namespace: {{ .Release.Namespace }}
+Service:   {{ .Release.Name }}-svc ({{ .Values.service.type }})
+
+If NodePort:
+  NodePort: {{ .Values.service.nodePort | default "auto-assigned" }}
+  curl test:
+    kubectl get nodes -o wide
+    curl http://<node-ip>:{{ .Values.service.nodePort | default "<auto-nodeport>" }}/health
+
+Internal (ClusterIP/NodePort):
+  curl:
+    kubectl run tmp --rm -it --image=curlimages/curl -n {{ .Release.Namespace }} -- \
+      curl http://{{ .Release.Name }}-svc:{{ .Values.service.port }}/health
+
+Routing config is served from ConfigMap: {{ .Release.Name }}-config
+Update backends in values.yaml and run: helm upgrade --install ...
+``

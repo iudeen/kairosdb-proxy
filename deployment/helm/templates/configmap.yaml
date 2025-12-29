@@ -1,0 +1,12 @@
+{{- if .Values.config }}
+{{- if .Values.config.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Release.Name }}-config
+data:
+  config.toml: |-
+{{ .Files.Get "config.toml" | indent 4 }}
+{{- end }}
+{{- end }}
+
