@@ -1,0 +1,46 @@
+
+replicaCount: 1
+
+image:
+  repository: kairosdb-proxy
+  tag: v1.00.00-7cdccce
+  pullPolicy: Always
+  pullSecrets:
+    - name: my-registry-secret
+
+service:
+  type: NodePort
+  port: 8080
+  nodePort: 30126
+  annotations: {}
+
+resources:
+  limits:
+    cpu: "1000m"
+    memory: 2Gi
+  requests:
+    cpu: "100m"
+    memory: 256Mi
+
+env:
+  KAIROS_PROXY_CONFIG: "/app/config.toml"
+  LOG_LEVEL: info
+
+probes:
+  readiness:
+    path: /health
+    initialDelaySeconds: 5
+    periodSeconds: 10
+    timeoutSeconds: 1
+    successThreshold: 1
+    failureThreshold: 3
+  liveness:
+    path: /health
+    initialDelaySeconds: 15
+    periodSeconds: 10
+    timeoutSeconds: 1
+    successThreshold: 1
+    failureThreshold: 3
+
+config:
+  enabled: "true"

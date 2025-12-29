@@ -51,6 +51,32 @@ docker compose up --build
 	- `max_outbound_concurrency`: cap on concurrent requests the proxy will make to backends.
 	- `mode`: `Simple` (default streaming pass-through) or `Multi` (split multi-metric requests and merge responses).
 
+**Logging**
+
+The proxy uses structured logging with configurable log levels for better observability, especially in container environments.
+
+- Set the `LOG_LEVEL` environment variable to control logging verbosity (default: `info`)
+- Supported log levels: `error`, `warn`, `info`, `debug`, `trace`
+- Alternatively, use `RUST_LOG` for fine-grained control (e.g., `RUST_LOG=kairos_proxy=debug`)
+
+Example with different log levels:
+```bash
+# Minimal logging (errors and warnings only)
+LOG_LEVEL=warn ./target/release/kairos-proxy
+
+# Standard logging (recommended for production)
+LOG_LEVEL=info ./target/release/kairos-proxy
+
+# Detailed logging (useful for debugging)
+LOG_LEVEL=debug ./target/release/kairos-proxy
+```
+
+In Docker/Docker Compose:
+```yaml
+environment:
+  - LOG_LEVEL=info
+```
+
 Example snippet (see `config.toml.example`):
 
 ```toml

@@ -1,0 +1,19 @@
+listen = "0.0.0.0:8080"
+timeout_secs = 5
+max_outbound_concurrency = 32
+mode = "simple"
+# Operation mode: "simple" forwards only the first metric; "multi" splits by metric and merges results.
+# mode = "multi"
+
+[[backends]]
+pattern = "^project_102.raw$"
+url = "http://project-102-kairosdb:80"
+
+
+[[backends]]
+pattern = "^project_103.raw$"
+url = "http://project-103-kairosdb:80"
+
+[[backends]]
+pattern = "^project_104.raw$"
+url = "http://project-104-kairosdb:80"
