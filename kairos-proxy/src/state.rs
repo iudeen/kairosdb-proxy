@@ -10,6 +10,7 @@ pub struct AppState {
     pub backends: Vec<(Regex, String, Option<String>)>,
     pub semaphore: Arc<Semaphore>,
     pub mode: Mode,
+    pub max_request_body_bytes: usize,
 }
 
 impl AppState {
@@ -34,11 +35,22 @@ impl AppState {
 
         let mode = cfg.mode.clone().unwrap_or_default();
 
+        // Default to 5 MB if not specified
+        const DEFAULT_MAX_BODY_BYTES: usize = 5_242_880; // 5 MB
+        const BYTES_PER_MB: usize = 1_048_576;
+        let max_request_body_bytes = cfg.max_request_body_bytes.unwrap_or(DEFAULT_MAX_BODY_BYTES);
+        debug!(
+            "Maximum request body size: {} bytes ({} MB)",
+            max_request_body_bytes,
+            max_request_body_bytes / BYTES_PER_MB
+        );
+
         Ok(AppState {
             client,
             backends,
             semaphore,
             mode,
+            max_request_body_bytes,
         })
     }
 }
@@ -60,6 +72,7 @@ mod tests {
             timeout_secs: Some(1),
             max_outbound_concurrency: Some(4),
             mode: Some(Mode::Simple),
+            max_request_body_bytes: None,
         };
         let st = AppState::from_config(&cfg).expect("build state");
         // mode should be set to Simple
