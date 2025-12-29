@@ -27,7 +27,7 @@ pub async fn query_metric_tags_handler(
     let body_bytes = match to_bytes(req.body_mut()).await {
         Ok(b) => b,
         Err(e) => {
-            error!("Failed to read request body");
+            error!("Failed to read request body: {:?}", e);
             return Err(e);
         }
     };
