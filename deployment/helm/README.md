@@ -40,10 +40,10 @@ helm install kairosdb-proxy . -n <namespace> \
 
 | Parameter | Description | Default |
 |-----------|-------------|---------|
-| `image.repository` | Container image repository | `azrilensprod.azurecr.io/ilens/infra/ftdm/custom-images/kairosdb-proxy` |
+| `image.repository` | Container image repository | `kairosdb-proxy` |
 | `image.tag` | Container image tag | `v1.00.00-7cdccce` |
 | `image.pullPolicy` | Image pull policy | `Always` |
-| `image.pullSecrets` | Image pull secrets | `[ilens-azregistry]` |
+| `image.pullSecrets` | Image pull secrets | `[azregistry]` |
 
 ### Service Configuration
 

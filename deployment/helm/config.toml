@@ -6,14 +6,14 @@ mode = "simple"
 # mode = "multi"
 
 [[backends]]
-pattern = "^project_102__ilens\\.live_data\\.raw$"
-url = "http://project-102-kairosdb.ilens-infra:80"
+pattern = "^project_102.raw$"
+url = "http://project-102-kairosdb:80"
 
 
 [[backends]]
-pattern = "^project_103__ilens\\.live_data\\.raw$"
-url = "http://project-103-kairosdb.ilens-infra:80"
+pattern = "^project_103.raw$"
+url = "http://project-103-kairosdb:80"
 
 [[backends]]
-pattern = "^project_104__ilens\\.live_data\\.raw$"
-url = "http://project-104-kairosdb.ilens-infra:80"
+pattern = "^project_104.raw$"
+url = "http://project-104-kairosdb:80"

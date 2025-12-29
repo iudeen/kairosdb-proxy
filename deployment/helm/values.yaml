@@ -2,11 +2,11 @@
 replicaCount: 1
 
 image:
-  repository: azrilensprod.azurecr.io/ilens/infra/ftdm/custom-images/kairosdb-proxy
+  repository: kairosdb-proxy
   tag: v1.00.00-7cdccce
   pullPolicy: Always
   pullSecrets:
-    - ilens-azregistry
+    - name: my-registry-secret
 
 service:
   type: NodePort
