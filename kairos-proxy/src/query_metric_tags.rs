@@ -81,7 +81,7 @@ pub async fn query_metric_tags_handler(
 
     // Read and parse the JSON body
     let mut req = req;
-    let body_bytes = match to_bytes(req.body_mut()).await {
+    let body_bytes = match to_bytes(req.body_mut(), state.max_request_body_bytes).await {
         Ok(b) => b,
         Err(e) => {
             error!("Failed to read request body: {:?}", e);
@@ -363,17 +363,27 @@ pub async fn query_metric_tags_handler(
     Ok((StatusCode::OK, axum::Json(v)).into_response())
 }
 
-// Helper to read the full body
-async fn to_bytes(body: &mut Body) -> Result<Bytes, StatusCode> {
+// Helper to read the full body with size limit
+async fn to_bytes(body: &mut Body, max_size: usize) -> Result<Bytes, StatusCode> {
     use axum::body::HttpBody;
-    let mut bytes = Bytes::new();
+    use bytes::BytesMut;
+    
+    let mut buf = BytesMut::new();
+    let mut total_size = 0;
+    
     while let Some(chunk_res) = body.data().await {
-        match chunk_res {
-            Ok(chunk) => {
-                bytes = [bytes, chunk].concat().into();
-            }
+        let chunk = match chunk_res {
+            Ok(chunk) => chunk,
             Err(_) => return Err(StatusCode::BAD_REQUEST),
+        };
+        
+        total_size += chunk.len();
+        if total_size > max_size {
+            return Err(StatusCode::PAYLOAD_TOO_LARGE);
         }
+        
+        buf.extend_from_slice(&chunk);
     }
-    Ok(bytes)
+    
+    Ok(buf.freeze())
 }

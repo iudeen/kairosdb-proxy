@@ -27,6 +27,9 @@ pub struct Config {
     // Operation mode: `simple` for single-metric forwarding, `multi` to split by metric and merge
     // Defaults to `multi`.
     pub mode: Option<Mode>,
+    // Maximum request body size in bytes. Requests exceeding this will return 413 Payload Too Large.
+    // If not set, defaults to 5 MB (5_242_880 bytes).
+    pub max_request_body_bytes: Option<usize>,
 }
 
 impl Config {

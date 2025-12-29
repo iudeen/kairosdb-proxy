@@ -83,7 +83,7 @@ pub async fn query_metric_handler(
 
     // Read and parse the JSON body
     let mut req = req;
-    let body_bytes = match to_bytes(req.body_mut()).await {
+    let body_bytes = match to_bytes(req.body_mut(), state.max_request_body_bytes).await {
         Ok(b) => b,
         Err(e) => {
             error!("Failed to read request body: {:?}", e);
@@ -367,19 +367,29 @@ pub async fn query_metric_handler(
     Ok((StatusCode::OK, axum::Json(v)).into_response())
 }
 
-// Helper to read the full body
-async fn to_bytes(body: &mut Body) -> Result<Bytes, StatusCode> {
+// Helper to read the full body with size limit
+async fn to_bytes(body: &mut Body, max_size: usize) -> Result<Bytes, StatusCode> {
     use axum::body::HttpBody;
-    let mut bytes = Bytes::new();
+    use bytes::BytesMut;
+    
+    let mut buf = BytesMut::new();
+    let mut total_size = 0;
+    
     while let Some(chunk_res) = body.data().await {
-        match chunk_res {
-            Ok(chunk) => {
-                bytes = [bytes, chunk].concat().into();
-            }
+        let chunk = match chunk_res {
+            Ok(chunk) => chunk,
             Err(_) => return Err(StatusCode::BAD_REQUEST),
+        };
+        
+        total_size += chunk.len();
+        if total_size > max_size {
+            return Err(StatusCode::PAYLOAD_TOO_LARGE);
         }
+        
+        buf.extend_from_slice(&chunk);
     }
-    Ok(bytes)
+    
+    Ok(buf.freeze())
 }
 
 #[cfg(test)]
@@ -481,6 +491,7 @@ mod tests {
             timeout_secs: Some(2),
             max_outbound_concurrency: Some(8),
             mode: Some(Mode::Multi),
+            max_request_body_bytes: None,
         };
         let state = Arc::new(AppState::from_config(&cfg).expect("state"));
 
@@ -536,6 +547,7 @@ mod tests {
             timeout_secs: Some(2),
             max_outbound_concurrency: Some(8),
             mode: Some(Mode::Simple),
+            max_request_body_bytes: None,
         };
         let state = Arc::new(AppState::from_config(&cfg).expect("state"));
 
@@ -617,6 +629,7 @@ mod tests {
             timeout_secs: Some(2),
             max_outbound_concurrency: Some(8),
             mode: Some(Mode::Simple),
+            max_request_body_bytes: None,
         };
         let state = Arc::new(AppState::from_config(&cfg).expect("state"));
 
@@ -670,6 +683,7 @@ mod tests {
             timeout_secs: Some(2),
             max_outbound_concurrency: Some(8),
             mode: Some(Mode::Simple),
+            max_request_body_bytes: None,
         };
         let state = Arc::new(AppState::from_config(&cfg).expect("state"));
 
@@ -719,6 +733,7 @@ mod tests {
             timeout_secs: Some(2),
             max_outbound_concurrency: Some(8),
             mode: Some(Mode::Simple),
+            max_request_body_bytes: None,
         };
         let state = Arc::new(AppState::from_config(&cfg).expect("state"));
 
@@ -741,5 +756,87 @@ mod tests {
             rec1.is_some(),
             "cpu backend should have received the request from body parsing"
         );
+    }
+
+    #[tokio::test]
+    async fn request_body_size_limit_enforced() {
+        let (b1_url, _r1) = spawn_mock_server().await;
+
+        let cfg = Config {
+            listen: None,
+            backends: vec![Backend {
+                pattern: "^cpu\\..*".to_string(),
+                url: b1_url.clone(),
+                token: None,
+            }],
+            timeout_secs: Some(2),
+            max_outbound_concurrency: Some(8),
+            mode: Some(Mode::Simple),
+            max_request_body_bytes: Some(100), // Very small limit: 100 bytes
+        };
+        let state = Arc::new(AppState::from_config(&cfg).expect("state"));
+
+        // Create a request body larger than 100 bytes
+        let large_payload = json!({
+            "metrics": [{
+                "name": "cpu.test",
+                "tags": {
+                    "host": "server1",
+                    "datacenter": "dc1"
+                },
+                "data": "x".repeat(200) // Create a large string
+            }]
+        });
+        let body = serde_json::to_vec(&large_payload).unwrap();
+        assert!(body.len() > 100, "test body should exceed 100 bytes");
+
+        let req = Request::builder()
+            .method(axum::http::Method::POST)
+            .uri("/api/v1/datapoints/query")
+            .header("content-type", "application/json")
+            .body(Body::from(body))
+            .unwrap();
+
+        let result = query_metric_handler(State(state), req).await;
+        assert!(result.is_err(), "should return error for oversized body");
+        assert_eq!(
+            result.unwrap_err(),
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "should return 413 Payload Too Large"
+        );
+    }
+
+    #[tokio::test]
+    async fn request_body_within_limit_succeeds() {
+        let (b1_url, _r1) = spawn_mock_server().await;
+
+        let cfg = Config {
+            listen: None,
+            backends: vec![Backend {
+                pattern: "^cpu\\..*".to_string(),
+                url: b1_url.clone(),
+                token: None,
+            }],
+            timeout_secs: Some(2),
+            max_outbound_concurrency: Some(8),
+            mode: Some(Mode::Simple),
+            max_request_body_bytes: Some(1000), // 1000 bytes limit
+        };
+        let state = Arc::new(AppState::from_config(&cfg).expect("state"));
+
+        // Create a small request body well within the limit
+        let payload = json!({ "metrics": [{ "name": "cpu.test" }] });
+        let body = serde_json::to_vec(&payload).unwrap();
+        assert!(body.len() < 1000, "test body should be under 1000 bytes");
+
+        let req = Request::builder()
+            .method(axum::http::Method::POST)
+            .uri("/api/v1/datapoints/query")
+            .header("content-type", "application/json")
+            .body(Body::from(body))
+            .unwrap();
+
+        let result = query_metric_handler(State(state), req).await;
+        assert!(result.is_ok(), "should succeed for body within limit");
     }
 }
