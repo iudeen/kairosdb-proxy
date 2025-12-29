@@ -2,8 +2,8 @@
 replicaCount: 1
 
 image:
-  repository: kairosdb-proxy
-  tag: v1.00.00-7cdccce
+  repository: ghcr.io/iudeen/kairosdb-proxy
+  tag: latest
   pullPolicy: Always
   pullSecrets:
     - name: my-registry-secret
