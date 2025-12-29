@@ -901,10 +901,18 @@ mod tests {
         let rec = r1.lock().await;
         let received = rec.as_ref().expect("received payload");
         assert_eq!(
-            received.get("metrics").and_then(|m| m.get(0)).and_then(|m| m.get("name")).and_then(|n| n.as_str()),
+            received
+                .get("metrics")
+                .and_then(|m| m.get(0))
+                .and_then(|m| m.get("name"))
+                .and_then(|n| n.as_str()),
             Some("cpu.test")
         );
-        assert!(received.get("metrics").and_then(|m| m.get(0)).and_then(|m| m.get("tags")).is_some());
+        assert!(received
+            .get("metrics")
+            .and_then(|m| m.get(0))
+            .and_then(|m| m.get("tags"))
+            .is_some());
         assert!(received.get("start_absolute").is_some());
     }
 }
