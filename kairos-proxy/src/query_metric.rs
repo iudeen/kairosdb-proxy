@@ -15,7 +15,7 @@ pub async fn query_metric_handler(
     req: Request<Body>,
 ) -> Result<Response, StatusCode> {
     debug!("Received query_metric request");
-    
+
     // Only POST is allowed for this endpoint
     if req.method() != axum::http::Method::POST {
         warn!("Method not allowed: {}", req.method());
@@ -141,9 +141,12 @@ pub async fn query_metric_handler(
     use std::collections::HashMap;
     let mut backend_metrics: HashMap<usize, Vec<serde_json::Value>> = HashMap::new();
     let mut backend_info: HashMap<usize, (&str, Option<&str>)> = HashMap::new();
-    
-    debug!("Processing request in Multi mode with {} metric(s)", metrics.len());
-    
+
+    debug!(
+        "Processing request in Multi mode with {} metric(s)",
+        metrics.len()
+    );
+
     for metric in metrics.iter() {
         let name = metric.get("name").and_then(|v| v.as_str());
         let mut found = false;
@@ -163,7 +166,7 @@ pub async fn query_metric_handler(
             return Err(StatusCode::BAD_GATEWAY);
         }
     }
-    
+
     info!(
         "Routing {} metric(s) to {} backend(s)",
         metrics.len(),
@@ -172,7 +175,7 @@ pub async fn query_metric_handler(
 
     // Clone headers once to reuse for outbound requests
     let headers = req.headers().clone();
-    
+
     // Store the count before the move
     let backend_count = backend_metrics.len();
 
@@ -325,7 +328,10 @@ pub async fn query_metric_handler(
     let mut response = serde_json::Map::new();
     response.insert("queries".to_string(), serde_json::Value::Array(queries_arr));
     let v = serde_json::Value::Object(response);
-    info!("Successfully merged responses from {} backend(s)", backend_count);
+    info!(
+        "Successfully merged responses from {} backend(s)",
+        backend_count
+    );
     Ok((StatusCode::OK, axum::Json(v)).into_response())
 }
 

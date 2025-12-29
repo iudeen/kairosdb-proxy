@@ -22,7 +22,10 @@ impl AppState {
         for b in &cfg.backends {
             let re = Regex::new(&b.pattern).map_err(|e| anyhow::anyhow!(e))?;
             backends.push((re, b.url.clone(), b.token.clone()));
-            info!("Registered backend: pattern='{}' -> url='{}'", b.pattern, b.url);
+            info!(
+                "Registered backend: pattern='{}' -> url='{}'",
+                b.pattern, b.url
+            );
         }
 
         let max_outbound = cfg.max_outbound_concurrency.unwrap_or(32);

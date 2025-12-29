@@ -19,7 +19,7 @@ async fn main() -> anyhow::Result<()> {
     let log_level = std::env::var("LOG_LEVEL").unwrap_or_else(|_| "info".to_string());
     let env_filter = tracing_subscriber::EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new(&log_level));
-    
+
     tracing_subscriber::fmt()
         .with_env_filter(env_filter)
         .with_target(false)
@@ -28,7 +28,10 @@ async fn main() -> anyhow::Result<()> {
     let config_path = std::env::var("KAIROS_PROXY_CONFIG").unwrap_or_else(|_| "config.toml".into());
     info!("Loading configuration from: {}", config_path);
     let cfg = Config::from_file(&config_path)?;
-    debug!("Configuration loaded successfully with {} backend(s)", cfg.backends.len());
+    debug!(
+        "Configuration loaded successfully with {} backend(s)",
+        cfg.backends.len()
+    );
 
     let state = Arc::new(AppState::from_config(&cfg)?);
     info!(

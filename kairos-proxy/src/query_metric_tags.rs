@@ -15,7 +15,7 @@ pub async fn query_metric_tags_handler(
     req: Request<Body>,
 ) -> Result<Response, StatusCode> {
     debug!("Received query_metric_tags request");
-    
+
     // Only POST is allowed for this endpoint
     if req.method() != axum::http::Method::POST {
         warn!("Method not allowed: {}", req.method());
@@ -58,7 +58,10 @@ pub async fn query_metric_tags_handler(
             .get("name")
             .and_then(|v| v.as_str())
             .ok_or(StatusCode::BAD_REQUEST)?;
-        info!("Routing tags query for metric '{}' to backend (Simple mode)", name);
+        info!(
+            "Routing tags query for metric '{}' to backend (Simple mode)",
+            name
+        );
         // find backend
         let mut target: Option<(String, Option<String>)> = None;
         for (re, url, token) in state.backends.iter() {
@@ -139,9 +142,12 @@ pub async fn query_metric_tags_handler(
     use std::collections::HashMap;
     let mut backend_metrics: HashMap<usize, Vec<serde_json::Value>> = HashMap::new();
     let mut backend_info: HashMap<usize, (&str, Option<&str>)> = HashMap::new();
-    
-    debug!("Processing tags request in Multi mode with {} metric(s)", metrics.len());
-    
+
+    debug!(
+        "Processing tags request in Multi mode with {} metric(s)",
+        metrics.len()
+    );
+
     for metric in metrics.iter() {
         let name = metric.get("name").and_then(|v| v.as_str());
         let mut found = false;
@@ -161,7 +167,7 @@ pub async fn query_metric_tags_handler(
             return Err(StatusCode::BAD_GATEWAY);
         }
     }
-    
+
     info!(
         "Routing {} tags query metric(s) to {} backend(s)",
         metrics.len(),
@@ -170,7 +176,7 @@ pub async fn query_metric_tags_handler(
 
     // Clone headers once to reuse for outbound requests
     let headers = req.headers().clone();
-    
+
     // Store the count before the move
     let backend_count = backend_metrics.len();
 
@@ -321,7 +327,10 @@ pub async fn query_metric_tags_handler(
     let mut response = serde_json::Map::new();
     response.insert("queries".to_string(), serde_json::Value::Array(queries_arr));
     let v = serde_json::Value::Object(response);
-    info!("Successfully merged tags responses from {} backend(s)", backend_count);
+    info!(
+        "Successfully merged tags responses from {} backend(s)",
+        backend_count
+    );
     Ok((StatusCode::OK, axum::Json(v)).into_response())
 }
 
