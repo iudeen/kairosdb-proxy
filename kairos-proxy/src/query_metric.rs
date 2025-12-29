@@ -125,13 +125,13 @@ pub async fn query_metric_handler(
                 Err(_) => return Err(StatusCode::BAD_REQUEST),
             };
 
-            // Extract first metric name
+            // Extract first metric name (move out of Vec to avoid clone)
             request
                 .metrics
-                .first()
+                .into_iter()
+                .next()
                 .ok_or(StatusCode::BAD_REQUEST)?
                 .name
-                .clone()
         };
 
         // Find backend matching the metric name
