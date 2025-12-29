@@ -36,11 +36,13 @@ impl AppState {
         let mode = cfg.mode.clone().unwrap_or_default();
 
         // Default to 5 MB if not specified
-        let max_request_body_bytes = cfg.max_request_body_bytes.unwrap_or(5_242_880);
+        const DEFAULT_MAX_BODY_BYTES: usize = 5_242_880; // 5 MB
+        const BYTES_PER_MB: usize = 1_048_576;
+        let max_request_body_bytes = cfg.max_request_body_bytes.unwrap_or(DEFAULT_MAX_BODY_BYTES);
         debug!(
             "Maximum request body size: {} bytes ({} MB)",
             max_request_body_bytes,
-            max_request_body_bytes / 1_048_576
+            max_request_body_bytes / BYTES_PER_MB
         );
 
         Ok(AppState {

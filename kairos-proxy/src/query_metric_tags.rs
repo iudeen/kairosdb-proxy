@@ -369,7 +369,7 @@ async fn to_bytes(body: &mut Body, max_size: usize) -> Result<Bytes, StatusCode>
     use bytes::BytesMut;
     
     let mut buf = BytesMut::new();
-    let mut total_size = 0;
+    let mut total_size: usize = 0;
     
     while let Some(chunk_res) = body.data().await {
         let chunk = match chunk_res {
@@ -377,10 +377,11 @@ async fn to_bytes(body: &mut Body, max_size: usize) -> Result<Bytes, StatusCode>
             Err(_) => return Err(StatusCode::BAD_REQUEST),
         };
         
-        total_size += chunk.len();
-        if total_size > max_size {
-            return Err(StatusCode::PAYLOAD_TOO_LARGE);
-        }
+        // Check for overflow and size limit
+        total_size = match total_size.checked_add(chunk.len()) {
+            Some(new_size) if new_size <= max_size => new_size,
+            _ => return Err(StatusCode::PAYLOAD_TOO_LARGE),
+        };
         
         buf.extend_from_slice(&chunk);
     }

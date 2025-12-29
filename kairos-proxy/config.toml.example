@@ -1,6 +1,9 @@
 listen = "0.0.0.0:8080"
 timeout_secs = 5
 max_outbound_concurrency = 32
+# Maximum request body size in bytes. Requests exceeding this will return 413 Payload Too Large.
+# Default is 5 MB (5242880 bytes) if not specified.
+# max_request_body_bytes = 5242880
 # Operation mode: "simple" forwards only the first metric; "multi" splits by metric and merges results.
 # mode = "multi"
 

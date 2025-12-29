@@ -373,7 +373,7 @@ async fn to_bytes(body: &mut Body, max_size: usize) -> Result<Bytes, StatusCode>
     use bytes::BytesMut;
     
     let mut buf = BytesMut::new();
-    let mut total_size = 0;
+    let mut total_size: usize = 0;
     
     while let Some(chunk_res) = body.data().await {
         let chunk = match chunk_res {
@@ -381,10 +381,11 @@ async fn to_bytes(body: &mut Body, max_size: usize) -> Result<Bytes, StatusCode>
             Err(_) => return Err(StatusCode::BAD_REQUEST),
         };
         
-        total_size += chunk.len();
-        if total_size > max_size {
-            return Err(StatusCode::PAYLOAD_TOO_LARGE);
-        }
+        // Check for overflow and size limit
+        total_size = match total_size.checked_add(chunk.len()) {
+            Some(new_size) if new_size <= max_size => new_size,
+            _ => return Err(StatusCode::PAYLOAD_TOO_LARGE),
+        };
         
         buf.extend_from_slice(&chunk);
     }
@@ -762,6 +763,9 @@ mod tests {
     async fn request_body_size_limit_enforced() {
         let (b1_url, _r1) = spawn_mock_server().await;
 
+        const TEST_SIZE_LIMIT: usize = 100;
+        const LARGE_DATA_SIZE: usize = 200;
+        
         let cfg = Config {
             listen: None,
             backends: vec![Backend {
@@ -772,11 +776,11 @@ mod tests {
             timeout_secs: Some(2),
             max_outbound_concurrency: Some(8),
             mode: Some(Mode::Simple),
-            max_request_body_bytes: Some(100), // Very small limit: 100 bytes
+            max_request_body_bytes: Some(TEST_SIZE_LIMIT),
         };
         let state = Arc::new(AppState::from_config(&cfg).expect("state"));
 
-        // Create a request body larger than 100 bytes
+        // Create a request body larger than TEST_SIZE_LIMIT bytes
         let large_payload = json!({
             "metrics": [{
                 "name": "cpu.test",
@@ -784,11 +788,11 @@ mod tests {
                     "host": "server1",
                     "datacenter": "dc1"
                 },
-                "data": "x".repeat(200) // Create a large string
+                "data": "x".repeat(LARGE_DATA_SIZE)
             }]
         });
         let body = serde_json::to_vec(&large_payload).unwrap();
-        assert!(body.len() > 100, "test body should exceed 100 bytes");
+        assert!(body.len() > TEST_SIZE_LIMIT, "test body should exceed size limit");
 
         let req = Request::builder()
             .method(axum::http::Method::POST)
