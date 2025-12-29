@@ -8,3 +8,5 @@ services:
       - "8080:8080"
     volumes:
       - ./kairos-proxy/config.toml.example:/app/config.toml:ro
+    environment:
+      - LOG_LEVEL=info
