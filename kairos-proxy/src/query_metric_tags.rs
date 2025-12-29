@@ -8,14 +8,17 @@ use axum::{
 use bytes::Bytes;
 use futures::{stream::FuturesUnordered, StreamExt};
 use std::sync::Arc;
-use tracing::error;
+use tracing::{debug, error, info, warn};
 
 pub async fn query_metric_tags_handler(
     State(state): State<Arc<AppState>>,
     req: Request<Body>,
 ) -> Result<Response, StatusCode> {
+    debug!("Received query_metric_tags request");
+    
     // Only POST is allowed for this endpoint
     if req.method() != axum::http::Method::POST {
+        warn!("Method not allowed: {}", req.method());
         return Err(StatusCode::METHOD_NOT_ALLOWED);
     }
 
@@ -24,41 +27,53 @@ pub async fn query_metric_tags_handler(
     let body_bytes = match to_bytes(req.body_mut()).await {
         Ok(b) => b,
         Err(e) => {
-            error!("reading body failed");
+            error!("Failed to read request body");
             return Err(e);
         }
     };
 
     let mut json: serde_json::Value = match serde_json::from_slice(&body_bytes) {
         Ok(j) => j,
-        Err(_) => return Err(StatusCode::BAD_REQUEST),
+        Err(e) => {
+            error!("Failed to parse JSON body: {}", e);
+            return Err(StatusCode::BAD_REQUEST);
+        }
     };
 
     // Extract metrics array
     let metrics = json.get_mut("metrics").and_then(|v| v.as_array_mut());
     let metrics = match metrics {
         Some(m) if !m.is_empty() => m,
-        _ => return Err(StatusCode::BAD_REQUEST),
+        _ => {
+            warn!("Request contains no metrics or invalid metrics array");
+            return Err(StatusCode::BAD_REQUEST);
+        }
     };
 
     // If running in simple mode, forward only the first metric to its matching backend
     if matches!(state.mode, crate::config::Mode::Simple) {
+        debug!("Processing tags request in Simple mode");
         let first = metrics.first().cloned().ok_or(StatusCode::BAD_REQUEST)?;
         let name = first
             .get("name")
             .and_then(|v| v.as_str())
             .ok_or(StatusCode::BAD_REQUEST)?;
+        info!("Routing tags query for metric '{}' to backend (Simple mode)", name);
         // find backend
         let mut target: Option<(String, Option<String>)> = None;
         for (re, url, token) in state.backends.iter() {
             if re.is_match(name) {
                 target = Some((url.clone(), token.clone()));
+                debug!("Matched backend: {}", url);
                 break;
             }
         }
         let (url, token) = match target {
             Some(t) => t,
-            None => return Err(StatusCode::BAD_GATEWAY),
+            None => {
+                error!("No backend matched metric '{}'", name);
+                return Err(StatusCode::BAD_GATEWAY);
+            }
         };
 
         // Use the original full payload but determine backend by the first metric
@@ -82,10 +97,14 @@ pub async fn query_metric_tags_handler(
         if let Some(t) = token {
             builder = builder.header("Authorization", format!("Bearer {}", t));
         }
-        let resp = builder.send().await.map_err(|_| StatusCode::BAD_GATEWAY)?;
+        let resp = builder.send().await.map_err(|e| {
+            error!("Backend request failed: {}", e);
+            StatusCode::BAD_GATEWAY
+        })?;
         // Clone backend headers before consuming the body
         let mut headers = resp.headers().clone();
         let status = resp.status();
+        debug!("Backend responded with status: {}", status);
 
         // Stream the backend response body directly to the client to keep memory usage low
         let stream = resp
@@ -120,6 +139,9 @@ pub async fn query_metric_tags_handler(
     use std::collections::HashMap;
     let mut backend_metrics: HashMap<usize, Vec<serde_json::Value>> = HashMap::new();
     let mut backend_info: HashMap<usize, (&str, Option<&str>)> = HashMap::new();
+    
+    debug!("Processing tags request in Multi mode with {} metric(s)", metrics.len());
+    
     for metric in metrics.iter() {
         let name = metric.get("name").and_then(|v| v.as_str());
         let mut found = false;
@@ -128,18 +150,29 @@ pub async fn query_metric_tags_handler(
                 if re.is_match(name) {
                     backend_metrics.entry(i).or_default().push(metric.clone());
                     backend_info.insert(i, (url.as_str(), token.as_deref()));
+                    debug!("Metric '{}' matched backend: {}", name, url);
                     found = true;
                     break;
                 }
             }
         }
         if !found {
+            error!("No backend matched metric: {:?}", name);
             return Err(StatusCode::BAD_GATEWAY);
         }
     }
+    
+    info!(
+        "Routing {} tags query metric(s) to {} backend(s)",
+        metrics.len(),
+        backend_metrics.len()
+    );
 
     // Clone headers once to reuse for outbound requests
     let headers = req.headers().clone();
+    
+    // Store the count before the move
+    let backend_count = backend_metrics.len();
 
     // For each backend, send a request with only the relevant metrics using bounded concurrency
     let mut futs = FuturesUnordered::new();
@@ -191,7 +224,10 @@ pub async fn query_metric_tags_handler(
             }
             match builder.send().await {
                 Ok(r) => r.json::<serde_json::Value>().await.ok(),
-                Err(_) => None,
+                Err(e) => {
+                    error!("Backend request to {} failed: {}", url, e);
+                    None
+                }
             }
         });
     }
@@ -202,6 +238,7 @@ pub async fn query_metric_tags_handler(
             results.push(res);
         }
     }
+    debug!("Received {} response(s) from backend(s)", results.len());
     // Merge all backend responses into queries[0].results[] by metric name
     use std::collections::BTreeMap;
     // Map: metric name -> Vec<result objects from all backends>
@@ -284,6 +321,7 @@ pub async fn query_metric_tags_handler(
     let mut response = serde_json::Map::new();
     response.insert("queries".to_string(), serde_json::Value::Array(queries_arr));
     let v = serde_json::Value::Object(response);
+    info!("Successfully merged tags responses from {} backend(s)", backend_count);
     Ok((StatusCode::OK, axum::Json(v)).into_response())
 }
 
