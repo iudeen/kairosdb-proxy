@@ -10,6 +10,65 @@ use futures::{stream::FuturesUnordered, StreamExt};
 use std::sync::Arc;
 use tracing::{debug, error, info, warn};
 
+/// Helper function to forward a request to a backend in Simple mode
+async fn forward_to_backend_simple(
+    state: &AppState,
+    url: &str,
+    token: &Option<String>,
+    body_bytes: Bytes,
+    headers: &hyper::HeaderMap,
+    endpoint: &str,
+) -> Result<Response, StatusCode> {
+    // Forward request to chosen backend
+    let mut builder = state
+        .client
+        .post(format!("{}{}", url.trim_end_matches('/'), endpoint))
+        .body(body_bytes);
+    for (name, value) in headers.iter() {
+        if name == hyper::http::header::HOST {
+            continue;
+        }
+        builder = builder.header(name, value);
+    }
+    if let Some(t) = token {
+        builder = builder.header("Authorization", format!("Bearer {}", t));
+    }
+    let resp = builder.send().await.map_err(|_| StatusCode::BAD_GATEWAY)?;
+    // Clone backend headers before consuming the body
+    let mut headers = resp.headers().clone();
+    let status = resp.status();
+
+    // Stream the backend response body directly to the client to keep memory usage low
+    let stream = resp
+        .bytes_stream()
+        .map(|res| res.map_err(|e| std::io::Error::other(format!("upstream error: {}", e))));
+    let body = StreamBody::new(stream);
+
+    // Standard hop-by-hop headers that should not be forwarded
+    const HOP_BY_HOP: [&str; 9] = [
+        "connection",
+        "keep-alive",
+        "proxy-authenticate",
+        "proxy-authorization",
+        "te",
+        "trailers",
+        "transfer-encoding",
+        "upgrade",
+        "host",
+    ];
+    for name in HOP_BY_HOP.iter() {
+        headers.remove(*name);
+    }
+
+    let resp_builder = hyper::Response::builder().status(status);
+    let mut response = resp_builder
+        .body(body)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    // Attach remaining headers from backend
+    response.headers_mut().extend(headers);
+    Ok(response.into_response())
+}
+
 pub async fn query_metric_handler(
     State(state): State<Arc<AppState>>,
     req: Request<Body>,
@@ -32,6 +91,66 @@ pub async fn query_metric_handler(
         }
     };
 
+    // If running in simple mode, check for X-METRICNAME header first
+    if matches!(state.mode, crate::config::Mode::Simple) {
+        // Check for X-METRICNAME header (case-insensitive)
+        let metric_name_from_header = req
+            .headers()
+            .iter()
+            .find(|(name, _)| name.as_str().eq_ignore_ascii_case("x-metricname"))
+            .and_then(|(_, value)| value.to_str().ok())
+            .map(|s| s.to_string());
+
+        let metric_name = if let Some(name) = metric_name_from_header {
+            // Use header value for routing, skip body parsing
+            name
+        } else {
+            // Parse JSON body for metric extraction
+            let json: serde_json::Value = match serde_json::from_slice(&body_bytes) {
+                Ok(j) => j,
+                Err(_) => return Err(StatusCode::BAD_REQUEST),
+            };
+
+            // Extract first metric name from body
+            let first_metric = json
+                .get("metrics")
+                .and_then(|v| v.as_array())
+                .and_then(|arr| arr.first())
+                .ok_or(StatusCode::BAD_REQUEST)?;
+
+            first_metric
+                .get("name")
+                .and_then(|v| v.as_str())
+                .ok_or(StatusCode::BAD_REQUEST)?
+                .to_string()
+        };
+
+        // Find backend matching the metric name
+        let mut target: Option<(String, Option<String>)> = None;
+        for (re, url, token) in state.backends.iter() {
+            if re.is_match(&metric_name) {
+                target = Some((url.clone(), token.clone()));
+                break;
+            }
+        }
+        let (url, token) = match target {
+            Some(t) => t,
+            None => return Err(StatusCode::BAD_GATEWAY),
+        };
+
+        // Forward request to chosen backend using helper function
+        return forward_to_backend_simple(
+            &state,
+            &url,
+            &token,
+            body_bytes,
+            req.headers(),
+            "/api/v1/datapoints/query",
+        )
+        .await;
+    }
+
+    // Parse JSON body for metric extraction (Multi mode)
     let mut json: serde_json::Value = match serde_json::from_slice(&body_bytes) {
         Ok(j) => j,
         Err(e) => {
@@ -50,94 +169,7 @@ pub async fn query_metric_handler(
         }
     };
 
-    // If running in simple mode, forward only the first metric to its matching backend
-    if matches!(state.mode, crate::config::Mode::Simple) {
-        debug!("Processing request in Simple mode");
-        let first = metrics.first().cloned().ok_or(StatusCode::BAD_REQUEST)?;
-        let name = first
-            .get("name")
-            .and_then(|v| v.as_str())
-            .ok_or(StatusCode::BAD_REQUEST)?;
-        info!("Routing metric '{}' to backend (Simple mode)", name);
-        // find backend
-        let mut target: Option<(String, Option<String>)> = None;
-        for (re, url, token) in state.backends.iter() {
-            if re.is_match(name) {
-                target = Some((url.clone(), token.clone()));
-                debug!("Matched backend: {}", url);
-                break;
-            }
-        }
-        let (url, token) = match target {
-            Some(t) => t,
-            None => {
-                error!("No backend matched metric '{}'", name);
-                return Err(StatusCode::BAD_GATEWAY);
-            }
-        };
-
-        // Use the original full payload but determine backend by the first metric
-        let body = body_bytes.clone();
-
-        // Forward request to chosen backend
-        let mut builder = state
-            .client
-            .post(format!(
-                "{}{}",
-                url.trim_end_matches('/'),
-                "/api/v1/datapoints/query"
-            ))
-            .body(body);
-        for (name, value) in req.headers().iter() {
-            if name == hyper::http::header::HOST {
-                continue;
-            }
-            builder = builder.header(name, value);
-        }
-        if let Some(t) = token {
-            builder = builder.header("Authorization", format!("Bearer {}", t));
-        }
-        let resp = builder.send().await.map_err(|e| {
-            error!("Backend request failed: {}", e);
-            StatusCode::BAD_GATEWAY
-        })?;
-        // Clone backend headers before consuming the body
-        let mut headers = resp.headers().clone();
-        let status = resp.status();
-        debug!("Backend responded with status: {}", status);
-
-        // Stream the backend response body directly to the client to keep memory usage low
-        let stream = resp
-            .bytes_stream()
-            .map(|res| res.map_err(|e| std::io::Error::other(format!("upstream error: {}", e))));
-        let body = StreamBody::new(stream);
-
-        // Standard hop-by-hop headers that should not be forwarded
-        const HOP_BY_HOP: [&str; 9] = [
-            "connection",
-            "keep-alive",
-            "proxy-authenticate",
-            "proxy-authorization",
-            "te",
-            "trailers",
-            "transfer-encoding",
-            "upgrade",
-            "host",
-        ];
-        for name in HOP_BY_HOP.iter() {
-            headers.remove(*name);
-        }
-
-        let resp_builder = hyper::Response::builder().status(status);
-        let mut response = resp_builder
-            .body(body)
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-        // Attach remaining headers from backend
-        response.headers_mut().extend(headers);
-        return Ok(response.into_response());
-    }
-
-    // Group metrics by backend
+    // Group metrics by backend (Multi mode)
     use std::collections::HashMap;
     let mut backend_metrics: HashMap<usize, Vec<serde_json::Value>> = HashMap::new();
     let mut backend_info: HashMap<usize, (&str, Option<&str>)> = HashMap::new();
@@ -560,6 +592,154 @@ mod tests {
                 .and_then(|v| v.as_str())
                 .unwrap(),
             "v"
+        );
+    }
+
+    #[tokio::test]
+    async fn simple_mode_uses_x_metricname_header_when_present() {
+        let (b1_url, r1) = spawn_mock_server().await;
+        let (b2_url, r2) = spawn_mock_server().await;
+
+        let cfg = Config {
+            listen: None,
+            backends: vec![
+                Backend {
+                    pattern: "^cpu\\..*".to_string(),
+                    url: b1_url.clone(),
+                    token: None,
+                },
+                Backend {
+                    pattern: "^mem\\..*".to_string(),
+                    url: b2_url.clone(),
+                    token: None,
+                },
+            ],
+            timeout_secs: Some(2),
+            max_outbound_concurrency: Some(8),
+            mode: Some(Mode::Simple),
+        };
+        let state = Arc::new(AppState::from_config(&cfg).expect("state"));
+
+        // Payload has cpu.first in body, but header specifies mem.test
+        let payload = json!({ "metrics": [ { "name": "cpu.first" } ] });
+        let body = serde_json::to_vec(&payload).unwrap();
+        let req = Request::builder()
+            .method(axum::http::Method::POST)
+            .uri("/api/v1/datapoints/query")
+            .header("content-type", "application/json")
+            .header("X-METRICNAME", "mem.test") // Header should take precedence
+            .body(Body::from(body))
+            .unwrap();
+
+        let resp = query_metric_handler(State(state), req).await.expect("resp");
+        assert_eq!(resp.status(), axum::http::StatusCode::OK);
+
+        // Verify that b2 (mem backend) received the request, not b1 (cpu backend)
+        let rec2 = r2.lock().await;
+        assert!(
+            rec2.is_some(),
+            "mem backend should have received the request"
+        );
+
+        let rec1 = r1.lock().await;
+        assert!(
+            rec1.is_none(),
+            "cpu backend should NOT have received the request"
+        );
+    }
+
+    #[tokio::test]
+    async fn simple_mode_header_case_insensitive() {
+        let (b1_url, _r1) = spawn_mock_server().await;
+        let (b2_url, r2) = spawn_mock_server().await;
+
+        let cfg = Config {
+            listen: None,
+            backends: vec![
+                Backend {
+                    pattern: "^cpu\\..*".to_string(),
+                    url: b1_url.clone(),
+                    token: None,
+                },
+                Backend {
+                    pattern: "^mem\\..*".to_string(),
+                    url: b2_url.clone(),
+                    token: None,
+                },
+            ],
+            timeout_secs: Some(2),
+            max_outbound_concurrency: Some(8),
+            mode: Some(Mode::Simple),
+        };
+        let state = Arc::new(AppState::from_config(&cfg).expect("state"));
+
+        let payload = json!({ "metrics": [ { "name": "cpu.first" } ] });
+        let body = serde_json::to_vec(&payload).unwrap();
+
+        // Test with different case variations
+        for header_name in &["x-metricname", "X-MetricName", "X-METRICNAME"] {
+            let req = Request::builder()
+                .method(axum::http::Method::POST)
+                .uri("/api/v1/datapoints/query")
+                .header("content-type", "application/json")
+                .header(*header_name, "mem.test")
+                .body(Body::from(body.clone()))
+                .unwrap();
+
+            let resp = query_metric_handler(State(state.clone()), req)
+                .await
+                .expect("resp");
+            assert_eq!(resp.status(), axum::http::StatusCode::OK);
+        }
+
+        // At least one request should have reached the mem backend
+        let rec2 = r2.lock().await;
+        assert!(rec2.is_some(), "mem backend should have received requests");
+    }
+
+    #[tokio::test]
+    async fn simple_mode_falls_back_to_body_when_no_header() {
+        let (b1_url, r1) = spawn_mock_server().await;
+        let (b2_url, _r2) = spawn_mock_server().await;
+
+        let cfg = Config {
+            listen: None,
+            backends: vec![
+                Backend {
+                    pattern: "^cpu\\..*".to_string(),
+                    url: b1_url.clone(),
+                    token: None,
+                },
+                Backend {
+                    pattern: "^mem\\..*".to_string(),
+                    url: b2_url.clone(),
+                    token: None,
+                },
+            ],
+            timeout_secs: Some(2),
+            max_outbound_concurrency: Some(8),
+            mode: Some(Mode::Simple),
+        };
+        let state = Arc::new(AppState::from_config(&cfg).expect("state"));
+
+        // No X-METRICNAME header, should use body parsing
+        let payload = json!({ "metrics": [ { "name": "cpu.first" } ] });
+        let body = serde_json::to_vec(&payload).unwrap();
+        let req = Request::builder()
+            .method(axum::http::Method::POST)
+            .uri("/api/v1/datapoints/query")
+            .header("content-type", "application/json")
+            .body(Body::from(body))
+            .unwrap();
+
+        let resp = query_metric_handler(State(state), req).await.expect("resp");
+        assert_eq!(resp.status(), axum::http::StatusCode::OK);
+
+        // Verify that b1 (cpu backend) received the request
+        let rec1 = r1.lock().await;
+        assert!(
+            rec1.is_some(),
+            "cpu backend should have received the request from body parsing"
         );
     }
 }
