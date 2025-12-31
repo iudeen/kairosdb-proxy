@@ -37,7 +37,7 @@ async fn forward_to_backend_simple(
     let request_url = url
         .join(endpoint)
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    
+
     let mut builder = state.client.post(request_url).body(body_bytes);
     for (name, value) in headers.iter() {
         if name == hyper::http::header::HOST {
@@ -251,7 +251,7 @@ pub async fn query_metric_tags_handler(
                 Ok(p) => p,
                 Err(_) => return None,
             };
-            
+
             // Build request URL using Url::join to avoid repeated parsing
             let request_url = match url.join("api/v1/datapoints/query/tags") {
                 Ok(u) => u,
@@ -260,7 +260,7 @@ pub async fn query_metric_tags_handler(
                     return None;
                 }
             };
-            
+
             let mut builder = client.post(request_url).body(body);
             for (name, value) in headers.iter() {
                 if name == hyper::http::header::HOST {

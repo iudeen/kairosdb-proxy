@@ -23,9 +23,8 @@ impl AppState {
         for b in &cfg.backends {
             let re = Regex::new(&b.pattern).map_err(|e| anyhow::anyhow!(e))?;
             // Parse and validate backend URL at startup
-            let url = Url::parse(&b.url).map_err(|e| {
-                anyhow::anyhow!("Invalid backend URL '{}': {}", b.url, e)
-            })?;
+            let url = Url::parse(&b.url)
+                .map_err(|e| anyhow::anyhow!("Invalid backend URL '{}': {}", b.url, e))?;
             backends.push((re, url, b.token.clone()));
             info!(
                 "Registered backend: pattern='{}' -> url='{}'",

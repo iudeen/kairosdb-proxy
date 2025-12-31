@@ -37,7 +37,7 @@ async fn forward_to_backend_simple(
     let request_url = url
         .join(endpoint)
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    
+
     let mut builder = state.client.post(request_url).body(body_bytes);
     for (name, value) in headers.iter() {
         if name == hyper::http::header::HOST {
