@@ -5,7 +5,12 @@ max_outbound_concurrency = 32
 # Default is 5 MB (5242880 bytes) if not specified.
 # max_request_body_bytes = 5242880
 # Operation mode: "simple" forwards only the first metric; "multi" splits by metric and merges results.
+# Defaults to "multi".
 # mode = "multi"
+# Routing cache size for Simple mode. When set, enables an LRU cache that maps metric names to
+# backend indices, bypassing regex scans for cached metrics. This significantly improves performance
+# for hot metrics. If not set or set to 0, the cache is disabled. Recommended size: 1000-10000.
+# routing_cache_size = 1000
 
 [[backends]]
 pattern = "^cpu\\..*"

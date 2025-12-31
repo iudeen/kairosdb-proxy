@@ -63,6 +63,7 @@ docker compose up --build
 	- `timeout_secs`: per-backend request timeout.
 	- `max_outbound_concurrency`: cap on concurrent requests the proxy will make to backends.
 	- `mode`: `Simple` (default streaming pass-through) or `Multi` (split multi-metric requests and merge responses).
+	- `routing_cache_size`: (Optional) Size of the LRU cache for routing decisions in `Simple` mode. When enabled, bypasses regex scans for hot metrics. Recommended: 1000-10000.
 
 **Logging**
 
@@ -104,7 +105,19 @@ url = "http://kairos-mem:8080"
 timeout_secs = 5
 max_outbound_concurrency = 8
 mode = "Multi"
+routing_cache_size = 1000
 ```
+
+**Performance optimization: Routing cache**
+
+In `Simple` mode, the proxy supports an optional bounded LRU cache for routing decisions. When enabled via `routing_cache_size`, the cache maps metric names to backend indices, bypassing expensive regex scans for hot metrics:
+
+- **Cache hit**: Routing decision retrieved instantly from cache (no regex scan)
+- **Cache miss**: Regex scan performed, result cached for future requests
+- **Bounded**: LRU eviction ensures the cache stays within the configured size
+- **Thread-safe**: Safe for concurrent access across multiple request handlers
+
+This feature is particularly valuable for workloads with a small set of frequently-queried metrics (the "hot path"). Recommended cache size: 1000-10000 entries depending on your metric cardinality. The cache is disabled by default and only applies to `Simple` mode.
 
 **Routing & modes**
 
