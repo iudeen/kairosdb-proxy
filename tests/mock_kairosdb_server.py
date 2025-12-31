@@ -2,35 +2,35 @@
 """
 Mock KairosDB server for integration testing.
 This server simulates KairosDB behavior by capturing payloads and returning consistent responses.
+Uses Bottle.py - a lightweight, single-file micro-framework with minimal resource usage.
 """
 
 import json
 import sys
-from flask import Flask, request, jsonify
-from waitress import serve
+from bottle import Bottle, request, response, run
 
 # Store received requests for validation
 received_requests = []
 
 
 def create_app(server_name):
-    """Create a Flask app that simulates KairosDB behavior."""
-    app = Flask(__name__)
-    app.config['SERVER_NAME_LABEL'] = server_name
+    """Create a Bottle app that simulates KairosDB behavior."""
+    app = Bottle()
 
-    @app.route('/health', methods=['GET'])
+    @app.route('/health', method='GET')
     def health():
         """Health check endpoint."""
-        return jsonify({"status": "ok", "server": server_name}), 200
+        response.content_type = 'application/json'
+        return json.dumps({"status": "ok", "server": server_name})
 
-    @app.route('/api/v1/datapoints/query', methods=['POST'])
+    @app.route('/api/v1/datapoints/query', method='POST')
     def query_datapoints():
         """
         Simulate KairosDB query endpoint.
         Captures the request payload and returns a consistent response.
         """
         try:
-            payload = request.get_json()
+            payload = request.json
             
             # Store the request for validation
             received_requests.append({
@@ -41,7 +41,7 @@ def create_app(server_name):
             })
             
             # Return a mock KairosDB response
-            response = {
+            result = {
                 "queries": []
             }
             
@@ -66,21 +66,24 @@ def create_app(server_name):
                             }
                         ]
                     }
-                    response["queries"].append(query_result)
+                    result["queries"].append(query_result)
             
-            return jsonify(response), 200
+            response.content_type = 'application/json'
+            return json.dumps(result)
             
         except Exception as e:
-            return jsonify({"error": str(e)}), 400
+            response.status = 400
+            response.content_type = 'application/json'
+            return json.dumps({"error": str(e)})
 
-    @app.route('/api/v1/datapoints/query/tags', methods=['POST'])
+    @app.route('/api/v1/datapoints/query/tags', method='POST')
     def query_tags():
         """
         Simulate KairosDB query tags endpoint.
         Captures the request payload and returns a consistent response.
         """
         try:
-            payload = request.get_json()
+            payload = request.json
             
             # Store the request for validation
             received_requests.append({
@@ -91,7 +94,7 @@ def create_app(server_name):
             })
             
             # Return a mock tag query response
-            response = {
+            result = {
                 "results": []
             }
             
@@ -105,23 +108,28 @@ def create_app(server_name):
                             "region": ["us-east-1"]
                         }
                     }
-                    response["results"].append(tag_result)
+                    result["results"].append(tag_result)
             
-            return jsonify(response), 200
+            response.content_type = 'application/json'
+            return json.dumps(result)
             
         except Exception as e:
-            return jsonify({"error": str(e)}), 400
+            response.status = 400
+            response.content_type = 'application/json'
+            return json.dumps({"error": str(e)})
 
-    @app.route('/debug/requests', methods=['GET'])
+    @app.route('/debug/requests', method='GET')
     def get_requests():
         """Debug endpoint to retrieve all received requests."""
-        return jsonify(received_requests), 200
+        response.content_type = 'application/json'
+        return json.dumps(received_requests)
 
-    @app.route('/debug/clear', methods=['POST'])
+    @app.route('/debug/clear', method='POST')
     def clear_requests():
         """Debug endpoint to clear stored requests."""
         received_requests.clear()
-        return jsonify({"status": "cleared"}), 200
+        response.content_type = 'application/json'
+        return json.dumps({"status": "cleared"})
 
     return app
 
@@ -138,8 +146,9 @@ def main():
     app = create_app(server_name)
     print(f"Starting mock KairosDB server '{server_name}' on port {port}...")
     
-    # Use waitress for production-ready serving
-    serve(app, host='127.0.0.1', port=port)
+    # Bottle's built-in server is lightweight and sufficient for testing
+    # quiet=True suppresses the default startup message for cleaner output
+    run(app, host='127.0.0.1', port=port, quiet=True)
 
 
 if __name__ == '__main__':

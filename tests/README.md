@@ -8,11 +8,11 @@ The integration tests validate that payloads remain consistent when passed throu
 
 ## Components
 
-- **`mock_kairosdb_server.py`**: Flask-based mock server that simulates KairosDB behavior
+- **`mock_kairosdb_server.py`**: Bottle.py-based mock server that simulates KairosDB behavior (lightweight, minimal dependencies)
 - **`launch_mock_servers.py`**: Script to launch 3 mock KairosDB servers on different ports
 - **`test_integration.py`**: pytest-based integration test suite
 - **`test_config.toml`**: Configuration file for the proxy during testing
-- **`requirements.txt`**: Python dependencies
+- **`requirements.txt`**: Python dependencies (minimal: bottle, pytest, requests)
 
 ## Mock Servers
 
