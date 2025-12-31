@@ -33,8 +33,9 @@ async fn forward_to_backend_simple(
     endpoint: &str,
 ) -> Result<Response, StatusCode> {
     // Build request URL using Url::join to avoid repeated parsing
+    // endpoint should start with '/' to be treated as absolute path from root
     let request_url = url
-        .join(endpoint.trim_start_matches('/'))
+        .join(endpoint)
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     
     let mut builder = state.client.post(request_url).body(body_bytes);
