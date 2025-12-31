@@ -26,17 +26,19 @@ struct MetricsRequest {
 /// Helper function to forward a request to a backend in Simple mode
 async fn forward_to_backend_simple(
     state: &AppState,
-    url: &str,
+    url: &reqwest::Url,
     token: &Option<String>,
     body_bytes: Bytes,
     headers: &hyper::HeaderMap,
     endpoint: &str,
 ) -> Result<Response, StatusCode> {
-    // Forward request to chosen backend
-    let mut builder = state
-        .client
-        .post(format!("{}{}", url.trim_end_matches('/'), endpoint))
-        .body(body_bytes);
+    // Build request URL using Url::join to avoid repeated parsing
+    // endpoint should start with '/' to be treated as absolute path from root
+    let request_url = url
+        .join(endpoint)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    let mut builder = state.client.post(request_url).body(body_bytes);
     for (name, value) in headers.iter() {
         if name == hyper::http::header::HOST {
             continue;
@@ -132,10 +134,10 @@ pub async fn query_metric_tags_handler(
         };
 
         // Find backend matching the metric name
-        let mut target: Option<(String, Option<String>)> = None;
+        let mut target: Option<(&reqwest::Url, Option<String>)> = None;
         for (re, url, token) in state.backends.iter() {
             if re.is_match(&metric_name) {
-                target = Some((url.clone(), token.clone()));
+                target = Some((url, token.clone()));
                 break;
             }
         }
@@ -147,7 +149,7 @@ pub async fn query_metric_tags_handler(
         // Forward request to chosen backend using helper function
         return forward_to_backend_simple(
             &state,
-            &url,
+            url,
             &token,
             body_bytes,
             req.headers(),
@@ -178,7 +180,7 @@ pub async fn query_metric_tags_handler(
     // Group metrics by backend (Multi mode)
     use std::collections::HashMap;
     let mut backend_metrics: HashMap<usize, Vec<serde_json::Value>> = HashMap::new();
-    let mut backend_info: HashMap<usize, (&str, Option<&str>)> = HashMap::new();
+    let mut backend_info: HashMap<usize, (&reqwest::Url, Option<&str>)> = HashMap::new();
 
     debug!(
         "Processing tags request in Multi mode with {} metric(s)",
@@ -192,7 +194,7 @@ pub async fn query_metric_tags_handler(
             for (i, (re, url, token)) in state.backends.iter().enumerate() {
                 if re.is_match(name) {
                     backend_metrics.entry(i).or_default().push(metric.clone());
-                    backend_info.insert(i, (url.as_str(), token.as_deref()));
+                    backend_info.insert(i, (url, token.as_deref()));
                     debug!("Metric '{}' matched backend: {}", name, url);
                     found = true;
                     break;
@@ -249,13 +251,17 @@ pub async fn query_metric_tags_handler(
                 Ok(p) => p,
                 Err(_) => return None,
             };
-            let mut builder = client
-                .post(format!(
-                    "{}{}",
-                    url.trim_end_matches('/'),
-                    "/api/v1/datapoints/query/tags"
-                ))
-                .body(body);
+
+            // Build request URL using Url::join to avoid repeated parsing
+            let request_url = match url.join("api/v1/datapoints/query/tags") {
+                Ok(u) => u,
+                Err(e) => {
+                    error!("Failed to build request URL: {}", e);
+                    return None;
+                }
+            };
+
+            let mut builder = client.post(request_url).body(body);
             for (name, value) in headers.iter() {
                 if name == hyper::http::header::HOST {
                     continue;

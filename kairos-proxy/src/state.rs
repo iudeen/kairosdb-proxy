@@ -1,13 +1,13 @@
 use crate::config::{Config, Mode};
 use regex::Regex;
-use reqwest::Client;
+use reqwest::{Client, Url};
 use std::sync::Arc;
 use tokio::sync::Semaphore;
 use tracing::{debug, info};
 
 pub struct AppState {
     pub client: Client,
-    pub backends: Vec<(Regex, String, Option<String>)>,
+    pub backends: Vec<(Regex, Url, Option<String>)>,
     pub semaphore: Arc<Semaphore>,
     pub mode: Mode,
     pub max_request_body_bytes: usize,
@@ -22,7 +22,10 @@ impl AppState {
         let mut backends = Vec::new();
         for b in &cfg.backends {
             let re = Regex::new(&b.pattern).map_err(|e| anyhow::anyhow!(e))?;
-            backends.push((re, b.url.clone(), b.token.clone()));
+            // Parse and validate backend URL at startup
+            let url = Url::parse(&b.url)
+                .map_err(|e| anyhow::anyhow!("Invalid backend URL '{}': {}", b.url, e))?;
+            backends.push((re, url, b.token.clone()));
             info!(
                 "Registered backend: pattern='{}' -> url='{}'",
                 b.pattern, b.url
@@ -81,5 +84,31 @@ mod tests {
             _ => panic!("expected Simple mode"),
         }
         assert_eq!(st.backends.len(), 1, "should have one backend compiled");
+    }
+
+    #[test]
+    fn appstate_rejects_invalid_backend_url() {
+        let cfg = Config {
+            listen: None,
+            backends: vec![Backend {
+                pattern: "^test".to_string(),
+                url: "not-a-valid-url".to_string(),
+                token: None,
+            }],
+            timeout_secs: Some(1),
+            max_outbound_concurrency: Some(4),
+            mode: Some(Mode::Multi),
+            max_request_body_bytes: None,
+        };
+        let result = AppState::from_config(&cfg);
+        assert!(result.is_err(), "should fail with invalid URL");
+        if let Err(e) = result {
+            let err_msg = e.to_string();
+            assert!(
+                err_msg.contains("Invalid backend URL"),
+                "error message should mention invalid URL: {}",
+                err_msg
+            );
+        }
     }
 }
