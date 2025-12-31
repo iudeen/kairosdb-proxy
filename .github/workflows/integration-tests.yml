@@ -110,7 +110,7 @@ jobs:
           if [ ! -z "$MOCK_PID" ]; then
             kill $MOCK_PID 2>/dev/null || true
           fi
-          # Cleanup any remaining processes
-          pkill -f "kairos-proxy" || true
-          pkill -f "mock_kairosdb_server" || true
+          # Give processes time to terminate gracefully
           sleep 2
+          # Verify cleanup
+          ps aux | grep -E "(kairos-proxy|mock_kairosdb)" | grep -v grep || echo "All processes cleaned up"
