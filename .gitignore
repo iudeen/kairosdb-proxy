@@ -71,3 +71,20 @@ temp/
 # Keep Cargo.lock in applications; if this repo is a library, you may want to ignore it
 # Cargo.lock
 .github/copilot-instructions.md
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+*.egg-info/
+dist/
+build/

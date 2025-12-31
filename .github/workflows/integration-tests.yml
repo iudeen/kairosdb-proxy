@@ -1,0 +1,116 @@
+name: Integration Tests
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  integration-test:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+          cache-dependency-path: tests/requirements.txt
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r tests/requirements.txt
+
+      - name: Install Rust toolchain
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          override: true
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Build kairosdb-proxy
+        run: |
+          cargo build --manifest-path kairos-proxy/Cargo.toml --release
+          ls -la target/release/
+
+      - name: Start mock KairosDB servers
+        run: |
+          cd tests
+          python launch_mock_servers.py &
+          MOCK_PID=$!
+          echo "MOCK_PID=$MOCK_PID" >> $GITHUB_ENV
+          echo "Mock servers starting with PID: $MOCK_PID"
+          # Wait for servers to be ready
+          sleep 5
+          # Verify servers are running
+          curl -f http://127.0.0.1:8081/health || exit 1
+          curl -f http://127.0.0.1:8082/health || exit 1
+          curl -f http://127.0.0.1:8083/health || exit 1
+          echo "All mock servers are ready"
+
+      - name: Start kairosdb-proxy
+        run: |
+          export KAIROS_PROXY_CONFIG=tests/test_config.toml
+          export LOG_LEVEL=debug
+          ./target/release/kairos-proxy &
+          PROXY_PID=$!
+          echo "PROXY_PID=$PROXY_PID" >> $GITHUB_ENV
+          echo "Proxy starting with PID: $PROXY_PID"
+          # Wait for proxy to be ready
+          for i in {1..30}; do
+            if curl -f http://127.0.0.1:8080/health 2>/dev/null; then
+              echo "Proxy is ready"
+              break
+            fi
+            if [ $i -eq 30 ]; then
+              echo "Proxy failed to start"
+              exit 1
+            fi
+            sleep 1
+          done
+
+      - name: Run integration tests
+        run: |
+          cd tests
+          pytest test_integration.py -v --tb=short --color=yes
+        env:
+          PYTHONUNBUFFERED: "1"
+
+      - name: Display proxy logs on failure
+        if: failure()
+        run: |
+          echo "=== Checking running processes ==="
+          ps aux | grep -E "(kairos-proxy|mock_kairosdb)" || true
+          echo "=== Checking port usage ==="
+          netstat -tuln | grep -E ":(8080|8081|8082|8083)" || true
+
+      - name: Cleanup
+        if: always()
+        run: |
+          # Kill proxy
+          if [ ! -z "$PROXY_PID" ]; then
+            kill $PROXY_PID 2>/dev/null || true
+          fi
+          # Kill mock servers
+          if [ ! -z "$MOCK_PID" ]; then
+            kill $MOCK_PID 2>/dev/null || true
+          fi
+          # Cleanup any remaining processes
+          pkill -f "kairos-proxy" || true
+          pkill -f "mock_kairosdb_server" || true
+          sleep 2
