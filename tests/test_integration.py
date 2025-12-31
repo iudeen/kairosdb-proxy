@@ -46,7 +46,8 @@ def clear_mock_server_requests():
     for server in MOCK_SERVERS:
         try:
             requests.post(f"{server['url']}/debug/clear", timeout=1)
-        except:
+        except Exception:
+            # Ignore errors when clearing, server might be unavailable
             pass
 
 
@@ -56,7 +57,8 @@ def get_mock_server_requests(server_url):
         resp = requests.get(f"{server_url}/debug/requests", timeout=1)
         if resp.status_code == 200:
             return resp.json()
-    except:
+    except Exception:
+        # Return empty list if server is unavailable
         pass
     return []
 

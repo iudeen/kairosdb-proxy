@@ -61,10 +61,12 @@ def start_servers():
                 if resp.status_code == 200:
                     print(f"✓ {server['name']} is ready")
                     break
-            except requests.exceptions.RequestException:
+            except requests.exceptions.RequestException as e:
                 if i == max_retries - 1:
-                    print(f"✗ {server['name']} failed to start")
+                    print(f"✗ {server['name']} failed to start after {max_retries} retries")
+                    print(f"   Last error: {e}")
                     raise
+                # Server not ready yet, continue waiting
                 time.sleep(0.5)
     
     print("All mock servers are ready!")
