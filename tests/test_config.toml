@@ -1,0 +1,19 @@
+listen = "127.0.0.1:8080"
+timeout_secs = 5
+max_outbound_concurrency = 32
+mode = "simple"
+
+# Route CPU metrics to mock server 1
+[[backends]]
+pattern = "^cpu\\..*"
+url = "http://127.0.0.1:8081"
+
+# Route memory metrics to mock server 2
+[[backends]]
+pattern = "^mem\\..*"
+url = "http://127.0.0.1:8082"
+
+# Route all other metrics to mock server 3
+[[backends]]
+pattern = ".*"
+url = "http://127.0.0.1:8083"
