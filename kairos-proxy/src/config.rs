@@ -30,6 +30,15 @@ pub struct Config {
     // Maximum request body size in bytes. Requests exceeding this will return 413 Payload Too Large.
     // If not set, defaults to 5 MB (5_242_880 bytes).
     pub max_request_body_bytes: Option<usize>,
+    // Connection timeout in seconds for establishing connections to backends.
+    // If not set, uses reqwest's default behavior (no specific connect timeout).
+    pub connect_timeout_secs: Option<u64>,
+    // Maximum number of idle connections to keep alive per host.
+    // If not set, uses reqwest's default (no specific limit).
+    pub pool_max_idle_per_host: Option<usize>,
+    // TCP keepalive interval in seconds to detect dead connections.
+    // If not set, uses system default TCP keepalive settings.
+    pub tcp_keepalive_secs: Option<u64>,
 }
 
 impl Config {
