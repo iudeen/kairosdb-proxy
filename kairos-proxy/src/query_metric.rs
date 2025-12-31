@@ -109,9 +109,8 @@ pub async fn query_metric_handler(
         // Check for X-METRICNAME header (case-insensitive)
         let metric_name_from_header = req
             .headers()
-            .iter()
-            .find(|(name, _)| name.as_str().eq_ignore_ascii_case("x-metricname"))
-            .and_then(|(_, value)| value.to_str().ok())
+            .get("x-metricname")
+            .and_then(|value| value.to_str().ok())
             .map(|s| s.to_string());
 
         let metric_name = if let Some(name) = metric_name_from_header {
