@@ -189,7 +189,7 @@ Contributing
 - PRs welcome. If you add features that expand scope (e.g., additional KairosDB endpoints), include tests and update `config.toml.example`.
 
 License & attribution
-- No license file included — add one if you intend to open-source this.
+- MIT
 
 Enjoy! If you want, you can:
 - add Prometheus metrics and a `/metrics` endpoint,
