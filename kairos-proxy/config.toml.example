@@ -1,9 +1,24 @@
 listen = "0.0.0.0:8080"
 timeout_secs = 5
 max_outbound_concurrency = 32
+
+# HTTP client tuning options for high-throughput scenarios
+# Connect timeout in seconds for establishing new connections to backends.
+# Helps detect unresponsive backends quickly. Default: no specific connect timeout.
+# connect_timeout_secs = 2
+
+# Maximum idle connections to maintain per backend host for connection reuse.
+# Higher values improve throughput under load. Default: no specific limit.
+# pool_max_idle_per_host = 32
+
+# TCP keepalive interval in seconds to detect dead connections.
+# Helps clean up stale connections. Default: system TCP keepalive settings.
+# tcp_keepalive_secs = 60
+
 # Maximum request body size in bytes. Requests exceeding this will return 413 Payload Too Large.
 # Default is 5 MB (5242880 bytes) if not specified.
 # max_request_body_bytes = 5242880
+
 # Operation mode: "simple" forwards only the first metric; "multi" splits by metric and merges results.
 # mode = "multi"
 

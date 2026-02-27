@@ -506,6 +506,9 @@ mod tests {
             max_outbound_concurrency: Some(8),
             mode: Some(Mode::Multi),
             max_request_body_bytes: None,
+            connect_timeout_secs: None,
+            pool_max_idle_per_host: None,
+            tcp_keepalive_secs: None,
         };
         let state = Arc::new(AppState::from_config(&cfg).expect("state"));
 
@@ -562,6 +565,9 @@ mod tests {
             max_outbound_concurrency: Some(8),
             mode: Some(Mode::Simple),
             max_request_body_bytes: None,
+            connect_timeout_secs: None,
+            pool_max_idle_per_host: None,
+            tcp_keepalive_secs: None,
         };
         let state = Arc::new(AppState::from_config(&cfg).expect("state"));
 
@@ -644,6 +650,9 @@ mod tests {
             max_outbound_concurrency: Some(8),
             mode: Some(Mode::Simple),
             max_request_body_bytes: None,
+            connect_timeout_secs: None,
+            pool_max_idle_per_host: None,
+            tcp_keepalive_secs: None,
         };
         let state = Arc::new(AppState::from_config(&cfg).expect("state"));
 
@@ -698,6 +707,9 @@ mod tests {
             max_outbound_concurrency: Some(8),
             mode: Some(Mode::Simple),
             max_request_body_bytes: None,
+            connect_timeout_secs: None,
+            pool_max_idle_per_host: None,
+            tcp_keepalive_secs: None,
         };
         let state = Arc::new(AppState::from_config(&cfg).expect("state"));
 
@@ -748,6 +760,9 @@ mod tests {
             max_outbound_concurrency: Some(8),
             mode: Some(Mode::Simple),
             max_request_body_bytes: None,
+            connect_timeout_secs: None,
+            pool_max_idle_per_host: None,
+            tcp_keepalive_secs: None,
         };
         let state = Arc::new(AppState::from_config(&cfg).expect("state"));
 
@@ -790,6 +805,9 @@ mod tests {
             max_outbound_concurrency: Some(8),
             mode: Some(Mode::Simple),
             max_request_body_bytes: Some(TEST_SIZE_LIMIT),
+            connect_timeout_secs: None,
+            pool_max_idle_per_host: None,
+            tcp_keepalive_secs: None,
         };
         let state = Arc::new(AppState::from_config(&cfg).expect("state"));
 
@@ -841,6 +859,9 @@ mod tests {
             max_outbound_concurrency: Some(8),
             mode: Some(Mode::Simple),
             max_request_body_bytes: Some(1000), // 1000 bytes limit
+            connect_timeout_secs: None,
+            pool_max_idle_per_host: None,
+            tcp_keepalive_secs: None,
         };
         let state = Arc::new(AppState::from_config(&cfg).expect("state"));
 
@@ -876,6 +897,9 @@ mod tests {
             max_outbound_concurrency: Some(8),
             mode: Some(Mode::Simple),
             max_request_body_bytes: None,
+            connect_timeout_secs: None,
+            pool_max_idle_per_host: None,
+            tcp_keepalive_secs: None,
         };
         let state = Arc::new(AppState::from_config(&cfg).expect("state"));
 
