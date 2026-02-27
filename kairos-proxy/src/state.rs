@@ -1,7 +1,9 @@
 use crate::config::{Config, Mode};
+use lru::LruCache;
 use regex::Regex;
 use reqwest::{Client, Url};
-use std::sync::Arc;
+use std::num::NonZeroUsize;
+use std::sync::{Arc, Mutex};
 use tokio::sync::Semaphore;
 use tracing::{debug, info};
 
@@ -11,6 +13,9 @@ pub struct AppState {
     pub semaphore: Arc<Semaphore>,
     pub mode: Mode,
     pub max_request_body_bytes: usize,
+    // Routing cache: maps metric name to backend index
+    // Only used in Simple mode to avoid repeated regex scans
+    pub routing_cache: Option<Arc<Mutex<LruCache<String, usize>>>>,
 }
 
 impl AppState {
@@ -48,12 +53,33 @@ impl AppState {
             max_request_body_bytes / BYTES_PER_MB
         );
 
+        // Initialize routing cache if configured (only useful in Simple mode)
+        let routing_cache = if let Some(size) = cfg.routing_cache_size {
+            if size > 0 {
+                // LruCache requires NonZeroUsize
+                if let Some(non_zero_size) = NonZeroUsize::new(size) {
+                    info!("Routing cache enabled with size: {}", size);
+                    Some(Arc::new(Mutex::new(LruCache::new(non_zero_size))))
+                } else {
+                    debug!("Routing cache size is 0, cache disabled");
+                    None
+                }
+            } else {
+                debug!("Routing cache size is 0, cache disabled");
+                None
+            }
+        } else {
+            debug!("Routing cache not configured, cache disabled");
+            None
+        };
+
         Ok(AppState {
             client,
             backends,
             semaphore,
             mode,
             max_request_body_bytes,
+            routing_cache,
         })
     }
 }
@@ -76,6 +102,7 @@ mod tests {
             max_outbound_concurrency: Some(4),
             mode: Some(Mode::Simple),
             max_request_body_bytes: None,
+            routing_cache_size: None,
         };
         let st = AppState::from_config(&cfg).expect("build state");
         // mode should be set to Simple
@@ -99,6 +126,7 @@ mod tests {
             max_outbound_concurrency: Some(4),
             mode: Some(Mode::Multi),
             max_request_body_bytes: None,
+            routing_cache_size: None,
         };
         let result = AppState::from_config(&cfg);
         assert!(result.is_err(), "should fail with invalid URL");

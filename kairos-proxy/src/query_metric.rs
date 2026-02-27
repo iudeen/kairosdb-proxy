@@ -135,17 +135,45 @@ pub async fn query_metric_handler(
                 .name
         };
 
-        // Find backend matching the metric name
-        let mut target: Option<(&reqwest::Url, Option<String>)> = None;
-        for (re, url, token) in state.backends.iter() {
-            if re.is_match(&metric_name) {
-                target = Some((url, token.clone()));
-                break;
+        // Try cache lookup first (if cache is enabled)
+        let mut backend_index: Option<usize> = None;
+        if let Some(cache) = &state.routing_cache {
+            if let Ok(mut cache_guard) = cache.lock() {
+                backend_index = cache_guard.get(&metric_name).copied();
+                if backend_index.is_some() {
+                    debug!("Routing cache hit for metric: {}", metric_name);
+                }
             }
         }
-        let (url, token) = match target {
-            Some(t) => t,
-            None => return Err(StatusCode::BAD_GATEWAY),
+
+        // If cache miss, perform regex scan
+        let (url, token, _matched_index) = if let Some(idx) = backend_index {
+            // Cache hit: retrieve backend directly
+            let (_, url, token) = &state.backends[idx];
+            (url, token.clone(), idx)
+        } else {
+            // Cache miss: scan backends with regex
+            let mut target: Option<(usize, &reqwest::Url, Option<String>)> = None;
+            for (i, (re, url, token)) in state.backends.iter().enumerate() {
+                if re.is_match(&metric_name) {
+                    target = Some((i, url, token.clone()));
+                    break;
+                }
+            }
+            let (idx, url, token) = match target {
+                Some(t) => t,
+                None => return Err(StatusCode::BAD_GATEWAY),
+            };
+
+            // Cache the routing decision
+            if let Some(cache) = &state.routing_cache {
+                if let Ok(mut cache_guard) = cache.lock() {
+                    cache_guard.put(metric_name.clone(), idx);
+                    debug!("Cached routing decision for metric: {}", metric_name);
+                }
+            }
+
+            (url, token, idx)
         };
 
         // Forward request to chosen backend using helper function
@@ -506,6 +534,7 @@ mod tests {
             max_outbound_concurrency: Some(8),
             mode: Some(Mode::Multi),
             max_request_body_bytes: None,
+            routing_cache_size: None,
         };
         let state = Arc::new(AppState::from_config(&cfg).expect("state"));
 
@@ -562,6 +591,7 @@ mod tests {
             max_outbound_concurrency: Some(8),
             mode: Some(Mode::Simple),
             max_request_body_bytes: None,
+            routing_cache_size: None,
         };
         let state = Arc::new(AppState::from_config(&cfg).expect("state"));
 
@@ -644,6 +674,7 @@ mod tests {
             max_outbound_concurrency: Some(8),
             mode: Some(Mode::Simple),
             max_request_body_bytes: None,
+            routing_cache_size: None,
         };
         let state = Arc::new(AppState::from_config(&cfg).expect("state"));
 
@@ -698,6 +729,7 @@ mod tests {
             max_outbound_concurrency: Some(8),
             mode: Some(Mode::Simple),
             max_request_body_bytes: None,
+            routing_cache_size: None,
         };
         let state = Arc::new(AppState::from_config(&cfg).expect("state"));
 
@@ -748,6 +780,7 @@ mod tests {
             max_outbound_concurrency: Some(8),
             mode: Some(Mode::Simple),
             max_request_body_bytes: None,
+            routing_cache_size: None,
         };
         let state = Arc::new(AppState::from_config(&cfg).expect("state"));
 
@@ -790,6 +823,7 @@ mod tests {
             max_outbound_concurrency: Some(8),
             mode: Some(Mode::Simple),
             max_request_body_bytes: Some(TEST_SIZE_LIMIT),
+            routing_cache_size: None,
         };
         let state = Arc::new(AppState::from_config(&cfg).expect("state"));
 
@@ -840,7 +874,8 @@ mod tests {
             timeout_secs: Some(2),
             max_outbound_concurrency: Some(8),
             mode: Some(Mode::Simple),
-            max_request_body_bytes: Some(1000), // 1000 bytes limit
+            max_request_body_bytes: Some(1000),
+            routing_cache_size: None,
         };
         let state = Arc::new(AppState::from_config(&cfg).expect("state"));
 
@@ -876,6 +911,7 @@ mod tests {
             max_outbound_concurrency: Some(8),
             mode: Some(Mode::Simple),
             max_request_body_bytes: None,
+            routing_cache_size: None,
         };
         let state = Arc::new(AppState::from_config(&cfg).expect("state"));
 
@@ -918,5 +954,249 @@ mod tests {
             .and_then(|m| m.get("tags"))
             .is_some());
         assert!(received.get("start_absolute").is_some());
+    }
+
+    #[tokio::test]
+    async fn routing_cache_enabled_and_used() {
+        let (b1_url, r1) = spawn_mock_server().await;
+        let (b2_url, _r2) = spawn_mock_server().await;
+
+        let cfg = Config {
+            listen: None,
+            backends: vec![
+                Backend {
+                    pattern: "^cpu\\..*".to_string(),
+                    url: b1_url.clone(),
+                    token: None,
+                },
+                Backend {
+                    pattern: "^mem\\..*".to_string(),
+                    url: b2_url.clone(),
+                    token: None,
+                },
+            ],
+            timeout_secs: Some(2),
+            max_outbound_concurrency: Some(8),
+            mode: Some(Mode::Simple),
+            max_request_body_bytes: None,
+            routing_cache_size: Some(100), // Enable cache
+        };
+        let state = Arc::new(AppState::from_config(&cfg).expect("state"));
+
+        // Verify cache is enabled
+        assert!(state.routing_cache.is_some(), "routing cache should be enabled");
+
+        // First request - cache miss, will do regex scan
+        let payload = json!({ "metrics": [ { "name": "cpu.test" } ] });
+        let body = serde_json::to_vec(&payload).unwrap();
+        let req = Request::builder()
+            .method(axum::http::Method::POST)
+            .uri("/api/v1/datapoints/query")
+            .header("content-type", "application/json")
+            .body(Body::from(body.clone()))
+            .unwrap();
+
+        let resp = query_metric_handler(State(state.clone()), req)
+            .await
+            .expect("resp");
+        assert_eq!(resp.status(), axum::http::StatusCode::OK);
+
+        // Verify backend received the request
+        let rec = r1.lock().await;
+        assert!(rec.is_some(), "cpu backend should have received the request");
+        drop(rec);
+
+        // Verify the cache now contains the routing decision
+        if let Some(cache) = &state.routing_cache {
+            let cache_guard = cache.lock().unwrap();
+            assert!(
+                cache_guard.peek(&"cpu.test".to_string()).is_some(),
+                "cache should contain routing decision for cpu.test"
+            );
+        }
+
+        // Second request with the same metric - should use cache
+        let req2 = Request::builder()
+            .method(axum::http::Method::POST)
+            .uri("/api/v1/datapoints/query")
+            .header("content-type", "application/json")
+            .body(Body::from(body))
+            .unwrap();
+
+        let resp2 = query_metric_handler(State(state.clone()), req2)
+            .await
+            .expect("resp2");
+        assert_eq!(resp2.status(), axum::http::StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn routing_cache_disabled_by_default() {
+        let (b1_url, _r1) = spawn_mock_server().await;
+
+        let cfg = Config {
+            listen: None,
+            backends: vec![Backend {
+                pattern: "^cpu\\..*".to_string(),
+                url: b1_url.clone(),
+                token: None,
+            }],
+            timeout_secs: Some(2),
+            max_outbound_concurrency: Some(8),
+            mode: Some(Mode::Simple),
+            max_request_body_bytes: None,
+            routing_cache_size: None, // No cache
+        };
+        let state = Arc::new(AppState::from_config(&cfg).expect("state"));
+
+        // Verify cache is disabled
+        assert!(state.routing_cache.is_none(), "routing cache should be disabled by default");
+    }
+
+    #[tokio::test]
+    async fn routing_cache_disabled_with_zero_size() {
+        let (b1_url, _r1) = spawn_mock_server().await;
+
+        let cfg = Config {
+            listen: None,
+            backends: vec![Backend {
+                pattern: "^cpu\\..*".to_string(),
+                url: b1_url.clone(),
+                token: None,
+            }],
+            timeout_secs: Some(2),
+            max_outbound_concurrency: Some(8),
+            mode: Some(Mode::Simple),
+            max_request_body_bytes: None,
+            routing_cache_size: Some(0), // Explicit zero
+        };
+        let state = Arc::new(AppState::from_config(&cfg).expect("state"));
+
+        // Verify cache is disabled
+        assert!(state.routing_cache.is_none(), "routing cache should be disabled with size 0");
+    }
+
+    #[tokio::test]
+    async fn routing_decisions_identical_with_and_without_cache() {
+        // Test that routing decisions are identical with and without cache
+        let (b1_url, r1_no_cache) = spawn_mock_server().await;
+        let (b2_url, r2_no_cache) = spawn_mock_server().await;
+        let (b3_url, r1_with_cache) = spawn_mock_server().await;
+        let (b4_url, r2_with_cache) = spawn_mock_server().await;
+
+        // Config without cache
+        let cfg_no_cache = Config {
+            listen: None,
+            backends: vec![
+                Backend {
+                    pattern: "^cpu\\..*".to_string(),
+                    url: b1_url.clone(),
+                    token: None,
+                },
+                Backend {
+                    pattern: "^mem\\..*".to_string(),
+                    url: b2_url.clone(),
+                    token: None,
+                },
+            ],
+            timeout_secs: Some(2),
+            max_outbound_concurrency: Some(8),
+            mode: Some(Mode::Simple),
+            max_request_body_bytes: None,
+            routing_cache_size: None,
+        };
+        let state_no_cache = Arc::new(AppState::from_config(&cfg_no_cache).expect("state"));
+
+        // Config with cache
+        let cfg_with_cache = Config {
+            listen: None,
+            backends: vec![
+                Backend {
+                    pattern: "^cpu\\..*".to_string(),
+                    url: b3_url.clone(),
+                    token: None,
+                },
+                Backend {
+                    pattern: "^mem\\..*".to_string(),
+                    url: b4_url.clone(),
+                    token: None,
+                },
+            ],
+            timeout_secs: Some(2),
+            max_outbound_concurrency: Some(8),
+            mode: Some(Mode::Simple),
+            max_request_body_bytes: None,
+            routing_cache_size: Some(100),
+        };
+        let state_with_cache = Arc::new(AppState::from_config(&cfg_with_cache).expect("state"));
+
+        // Test cpu metric
+        let cpu_payload = json!({ "metrics": [ { "name": "cpu.test" } ] });
+        let cpu_body = serde_json::to_vec(&cpu_payload).unwrap();
+
+        let req_no_cache = Request::builder()
+            .method(axum::http::Method::POST)
+            .uri("/api/v1/datapoints/query")
+            .header("content-type", "application/json")
+            .body(Body::from(cpu_body.clone()))
+            .unwrap();
+
+        let resp_no_cache = query_metric_handler(State(state_no_cache.clone()), req_no_cache)
+            .await
+            .expect("resp");
+        assert_eq!(resp_no_cache.status(), axum::http::StatusCode::OK);
+
+        let req_with_cache = Request::builder()
+            .method(axum::http::Method::POST)
+            .uri("/api/v1/datapoints/query")
+            .header("content-type", "application/json")
+            .body(Body::from(cpu_body))
+            .unwrap();
+
+        let resp_with_cache = query_metric_handler(State(state_with_cache.clone()), req_with_cache)
+            .await
+            .expect("resp");
+        assert_eq!(resp_with_cache.status(), axum::http::StatusCode::OK);
+
+        // Both should route to backend 0 (cpu backend)
+        let rec_no_cache = r1_no_cache.lock().await;
+        assert!(rec_no_cache.is_some(), "cpu backend (no cache) should receive request");
+
+        let rec_with_cache = r1_with_cache.lock().await;
+        assert!(rec_with_cache.is_some(), "cpu backend (with cache) should receive request");
+
+        // Test mem metric
+        let mem_payload = json!({ "metrics": [ { "name": "mem.test" } ] });
+        let mem_body = serde_json::to_vec(&mem_payload).unwrap();
+
+        let req2_no_cache = Request::builder()
+            .method(axum::http::Method::POST)
+            .uri("/api/v1/datapoints/query")
+            .header("content-type", "application/json")
+            .body(Body::from(mem_body.clone()))
+            .unwrap();
+
+        let resp2_no_cache = query_metric_handler(State(state_no_cache), req2_no_cache)
+            .await
+            .expect("resp");
+        assert_eq!(resp2_no_cache.status(), axum::http::StatusCode::OK);
+
+        let req2_with_cache = Request::builder()
+            .method(axum::http::Method::POST)
+            .uri("/api/v1/datapoints/query")
+            .header("content-type", "application/json")
+            .body(Body::from(mem_body))
+            .unwrap();
+
+        let resp2_with_cache = query_metric_handler(State(state_with_cache), req2_with_cache)
+            .await
+            .expect("resp");
+        assert_eq!(resp2_with_cache.status(), axum::http::StatusCode::OK);
+
+        // Both should route to backend 1 (mem backend)
+        let rec2_no_cache = r2_no_cache.lock().await;
+        assert!(rec2_no_cache.is_some(), "mem backend (no cache) should receive request");
+
+        let rec2_with_cache = r2_with_cache.lock().await;
+        assert!(rec2_with_cache.is_some(), "mem backend (with cache) should receive request");
     }
 }

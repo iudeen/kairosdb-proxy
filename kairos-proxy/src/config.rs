@@ -30,6 +30,10 @@ pub struct Config {
     // Maximum request body size in bytes. Requests exceeding this will return 413 Payload Too Large.
     // If not set, defaults to 5 MB (5_242_880 bytes).
     pub max_request_body_bytes: Option<usize>,
+    // Size of the routing cache for Simple mode. When set, enables an LRU cache that maps
+    // metric names to backend indices, bypassing regex scans for cached metrics.
+    // If not set or set to 0, the cache is disabled.
+    pub routing_cache_size: Option<usize>,
 }
 
 impl Config {
