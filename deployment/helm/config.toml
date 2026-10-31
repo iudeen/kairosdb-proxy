@@ -1,6 +1,7 @@
 listen = "0.0.0.0:8080"
 timeout_secs = 5
 max_outbound_concurrency = 32
+routing_cache_size = 10000
 mode = "simple"
 # Operation mode: "simple" forwards only the first metric; "multi" splits by metric and merges results.
 # mode = "multi"

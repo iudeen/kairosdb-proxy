@@ -30,6 +30,9 @@ pub struct Config {
     // Maximum request body size in bytes. Requests exceeding this will return 413 Payload Too Large.
     // If not set, defaults to 5 MB (5_242_880 bytes).
     pub max_request_body_bytes: Option<usize>,
+    // Maximum number of metric routing decisions cached in Simple mode.
+    // If not set, defaults to 10,000 entries.
+    pub routing_cache_size: Option<usize>,
     // Connection timeout in seconds for establishing connections to backends.
     // If not set, uses reqwest's default behavior (no specific connect timeout).
     pub connect_timeout_secs: Option<u64>,
