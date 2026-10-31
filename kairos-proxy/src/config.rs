@@ -36,8 +36,8 @@ pub struct Config {
     // Maximum number of idle connections to keep alive per host.
     // If not set, uses reqwest's default (no specific limit).
     pub pool_max_idle_per_host: Option<usize>,
-    // TCP keepalive interval in seconds to detect dead connections.
-    // If not set, uses system default TCP keepalive settings.
+    // Idle time in seconds before TCP keepalive probes begin; keepalive is disabled if not set.
+    // Probe spacing and retry count are controlled by the operating system.
     pub tcp_keepalive_secs: Option<u64>,
 }
 

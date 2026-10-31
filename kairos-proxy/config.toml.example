@@ -11,8 +11,8 @@ max_outbound_concurrency = 32
 # Higher values improve throughput under load. Default: no specific limit.
 # pool_max_idle_per_host = 32
 
-# TCP keepalive interval in seconds to detect dead connections.
-# Helps clean up stale connections. Default: system TCP keepalive settings.
+# Idle time in seconds before TCP keepalive probes begin. Keepalive is disabled by default.
+# Probe spacing and retry count are controlled by the operating system.
 # tcp_keepalive_secs = 60
 
 # Maximum request body size in bytes. Requests exceeding this will return 413 Payload Too Large.
