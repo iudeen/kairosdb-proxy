@@ -135,24 +135,16 @@ pub async fn query_metric_handler(
                 .name
         };
 
-        // Find backend matching the metric name
-        let mut target: Option<(&reqwest::Url, Option<String>)> = None;
-        for (re, url, token) in state.backends.iter() {
-            if re.is_match(&metric_name) {
-                target = Some((url, token.clone()));
-                break;
-            }
-        }
-        let (url, token) = match target {
-            Some(t) => t,
-            None => return Err(StatusCode::BAD_GATEWAY),
-        };
+        let backend_index = state
+            .route_simple(&metric_name)
+            .ok_or(StatusCode::BAD_GATEWAY)?;
+        let (_, url, token) = &state.backends[backend_index];
 
         // Forward request to chosen backend using helper function
         return forward_to_backend_simple(
             &state,
             url,
-            &token,
+            token,
             body_bytes,
             req.headers(),
             "/api/v1/datapoints/query",
@@ -506,6 +498,7 @@ mod tests {
             max_outbound_concurrency: Some(8),
             mode: Some(Mode::Multi),
             max_request_body_bytes: None,
+            routing_cache_size: None,
             connect_timeout_secs: None,
             pool_max_idle_per_host: None,
             tcp_keepalive_secs: None,
@@ -565,6 +558,7 @@ mod tests {
             max_outbound_concurrency: Some(8),
             mode: Some(Mode::Simple),
             max_request_body_bytes: None,
+            routing_cache_size: None,
             connect_timeout_secs: None,
             pool_max_idle_per_host: None,
             tcp_keepalive_secs: None,
@@ -650,6 +644,7 @@ mod tests {
             max_outbound_concurrency: Some(8),
             mode: Some(Mode::Simple),
             max_request_body_bytes: None,
+            routing_cache_size: None,
             connect_timeout_secs: None,
             pool_max_idle_per_host: None,
             tcp_keepalive_secs: None,
@@ -707,6 +702,7 @@ mod tests {
             max_outbound_concurrency: Some(8),
             mode: Some(Mode::Simple),
             max_request_body_bytes: None,
+            routing_cache_size: None,
             connect_timeout_secs: None,
             pool_max_idle_per_host: None,
             tcp_keepalive_secs: None,
@@ -760,6 +756,7 @@ mod tests {
             max_outbound_concurrency: Some(8),
             mode: Some(Mode::Simple),
             max_request_body_bytes: None,
+            routing_cache_size: None,
             connect_timeout_secs: None,
             pool_max_idle_per_host: None,
             tcp_keepalive_secs: None,
@@ -805,6 +802,7 @@ mod tests {
             max_outbound_concurrency: Some(8),
             mode: Some(Mode::Simple),
             max_request_body_bytes: Some(TEST_SIZE_LIMIT),
+            routing_cache_size: None,
             connect_timeout_secs: None,
             pool_max_idle_per_host: None,
             tcp_keepalive_secs: None,
@@ -859,6 +857,7 @@ mod tests {
             max_outbound_concurrency: Some(8),
             mode: Some(Mode::Simple),
             max_request_body_bytes: Some(1000), // 1000 bytes limit
+            routing_cache_size: None,
             connect_timeout_secs: None,
             pool_max_idle_per_host: None,
             tcp_keepalive_secs: None,
@@ -897,6 +896,7 @@ mod tests {
             max_outbound_concurrency: Some(8),
             mode: Some(Mode::Simple),
             max_request_body_bytes: None,
+            routing_cache_size: None,
             connect_timeout_secs: None,
             pool_max_idle_per_host: None,
             tcp_keepalive_secs: None,

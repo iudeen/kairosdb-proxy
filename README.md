@@ -93,6 +93,8 @@ environment:
 Example snippet (see `config.toml.example`):
 
 ```toml
+routing_cache_size = 10000
+
 [[backends]]
 pattern = "^cpu\\..*"
 url = "http://kairos-cpu:8080"
@@ -123,6 +125,7 @@ Choose `Simple` for throughput/low-footprint scenarios where the first metric re
 
 - `max_outbound_concurrency` — prevents the proxy from flooding backends. Tune to backend capacity.
 - `timeout_secs` — guards against slow backends; default is short to keep the proxy responsive.
+- `routing_cache_size` — maximum number of Simple-mode metric routing decisions retained in the LRU cache; defaults to 10,000, and `0` disables caching.
 - The proxy uses a `Semaphore` to bound concurrent outbound requests and `FuturesUnordered` for efficient parallelism.
 
 Tips:

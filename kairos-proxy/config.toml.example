@@ -19,6 +19,10 @@ max_outbound_concurrency = 32
 # Default is 5 MB (5242880 bytes) if not specified.
 # max_request_body_bytes = 5242880
 
+# Maximum number of metric routing decisions cached in Simple mode. Default: 10,000.
+# Set to 0 to disable the cache.
+# routing_cache_size = 10000
+
 # Operation mode: "simple" forwards only the first metric; "multi" splits by metric and merges results.
 # mode = "multi"
 

@@ -1,9 +1,56 @@
 use crate::config::{Config, Mode};
 use regex::Regex;
 use reqwest::{Client, Url};
-use std::sync::Arc;
+use std::{
+    collections::HashMap,
+    sync::{Arc, Mutex},
+};
 use tokio::sync::Semaphore;
 use tracing::{debug, info};
+
+struct RoutingCache {
+    entries: HashMap<String, (usize, u64)>,
+    capacity: usize,
+    sequence: u64,
+}
+
+impl RoutingCache {
+    fn new(capacity: usize) -> Self {
+        Self {
+            entries: HashMap::new(),
+            capacity,
+            sequence: 0,
+        }
+    }
+
+    fn get(&mut self, metric_name: &str) -> Option<usize> {
+        let (backend_index, last_used) = self.entries.get_mut(metric_name)?;
+        self.sequence = self.sequence.saturating_add(1);
+        *last_used = self.sequence;
+        Some(*backend_index)
+    }
+
+    fn insert(&mut self, metric_name: String, backend_index: usize) {
+        if self.capacity == 0 {
+            return;
+        }
+
+        self.sequence = self.sequence.saturating_add(1);
+        self.entries
+            .insert(metric_name, (backend_index, self.sequence));
+
+        if self.entries.len() > self.capacity {
+            if let Some(least_recently_used) = self
+                .entries
+                .iter()
+                .min_by_key(|(_, (_, last_used))| last_used)
+                .map(|(name, _)| name.clone())
+            {
+                self.entries.remove(&least_recently_used);
+            }
+        }
+    }
+}
 
 pub struct AppState {
     pub client: Client,
@@ -11,9 +58,33 @@ pub struct AppState {
     pub semaphore: Arc<Semaphore>,
     pub mode: Mode,
     pub max_request_body_bytes: usize,
+    routing_cache: Mutex<RoutingCache>,
 }
 
 impl AppState {
+    pub fn route_simple(&self, metric_name: &str) -> Option<usize> {
+        if let Some(backend_index) = self
+            .routing_cache
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(metric_name)
+        {
+            return Some(backend_index);
+        }
+
+        let backend_index = self
+            .backends
+            .iter()
+            .position(|(regex, _, _)| regex.is_match(metric_name))?;
+
+        self.routing_cache
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert(metric_name.to_string(), backend_index);
+
+        Some(backend_index)
+    }
+
     pub fn from_config(cfg: &Config) -> anyhow::Result<Self> {
         let timeout = std::time::Duration::from_secs(cfg.timeout_secs.unwrap_or(5));
         let mut client_builder = Client::builder().timeout(timeout);
@@ -76,6 +147,7 @@ impl AppState {
             semaphore,
             mode,
             max_request_body_bytes,
+            routing_cache: Mutex::new(RoutingCache::new(cfg.routing_cache_size.unwrap_or(10_000))),
         })
     }
 }
@@ -98,6 +170,7 @@ mod tests {
             max_outbound_concurrency: Some(4),
             mode: Some(Mode::Simple),
             max_request_body_bytes: None,
+            routing_cache_size: None,
             connect_timeout_secs: None,
             pool_max_idle_per_host: None,
             tcp_keepalive_secs: None,
@@ -124,6 +197,7 @@ mod tests {
             max_outbound_concurrency: Some(4),
             mode: Some(Mode::Multi),
             max_request_body_bytes: None,
+            routing_cache_size: None,
             connect_timeout_secs: None,
             pool_max_idle_per_host: None,
             tcp_keepalive_secs: None,
@@ -153,6 +227,7 @@ mod tests {
             max_outbound_concurrency: Some(16),
             mode: Some(Mode::Multi),
             max_request_body_bytes: None,
+            routing_cache_size: None,
             connect_timeout_secs: Some(2),
             pool_max_idle_per_host: Some(32),
             tcp_keepalive_secs: Some(60),
@@ -177,6 +252,7 @@ mod tests {
             max_outbound_concurrency: Some(8),
             mode: None,
             max_request_body_bytes: None,
+            routing_cache_size: None,
             connect_timeout_secs: None,
             pool_max_idle_per_host: None,
             tcp_keepalive_secs: None,
@@ -184,5 +260,44 @@ mod tests {
         // Should work with defaults (backward compatibility)
         let st = AppState::from_config(&cfg).expect("build state without tuning options");
         assert_eq!(st.backends.len(), 1, "should have one backend");
+    }
+
+    #[test]
+    fn routing_cache_is_lru_bounded_and_preserves_first_match() {
+        let cfg = Config {
+            listen: None,
+            backends: vec![
+                Backend {
+                    pattern: "^metric\\.".to_string(),
+                    url: "http://127.0.0.1:8080".to_string(),
+                    token: None,
+                },
+                Backend {
+                    pattern: "metric".to_string(),
+                    url: "http://127.0.0.1:8081".to_string(),
+                    token: None,
+                },
+            ],
+            timeout_secs: Some(1),
+            max_outbound_concurrency: Some(4),
+            mode: Some(Mode::Simple),
+            max_request_body_bytes: None,
+            routing_cache_size: Some(2),
+            connect_timeout_secs: None,
+            pool_max_idle_per_host: None,
+            tcp_keepalive_secs: None,
+        };
+        let state = AppState::from_config(&cfg).expect("build state");
+
+        assert_eq!(state.route_simple("metric.one"), Some(0));
+        assert_eq!(state.route_simple("metric.two"), Some(0));
+        assert_eq!(state.route_simple("metric.one"), Some(0));
+        assert_eq!(state.route_simple("metric.three"), Some(0));
+
+        let cache = state.routing_cache.lock().expect("lock cache");
+        assert_eq!(cache.entries.len(), 2);
+        assert!(!cache.entries.contains_key("metric.two"));
+        assert!(cache.entries.contains_key("metric.one"));
+        assert!(cache.entries.contains_key("metric.three"));
     }
 }
